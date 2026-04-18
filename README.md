@@ -1,6 +1,6 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-04-17
 **Author:** cot_radio project
 
@@ -127,24 +127,63 @@ The full unmodified callsign is preserved in the TAK comment field (field 2).
 
 ## APRS Message Encoding
 
-TAK chat messages are encoded as standard APRS messages:
+TAK chat messages are encoded as standard APRS messages with a TAK sender prefix in the body:
 
 ### All Chat → APRS Bulletin
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :message text here
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:HAWK:hello world
 ```
 
 ### Direct Message → APRS DM
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :message text here{42
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :TAK:HAWK:reply text{42
 ```
 
 | Field | Description |
 |-------|-------------|
 | `::` | APRS message data type (double colon) |
 | Addressee | 9-char space-padded recipient callsign. `BLN1` = bulletin (broadcast). |
-| Message | Free text after the `:` |
+| Message | `TAK:SENDER:body` — sender prefix preserves the original TAK/mesh callsign across the bridge |
 | `{ID` | Optional message ID for ack/rej (e.g., `{42`) |
+
+### TAK Sender Prefix
+
+The message body begins with `TAK:SENDER:` where SENDER is the original TAK callsign (or mesh node short name) of whoever sent the chat message inside the originating TAK environment. Receiving cot_radio gateways parse this prefix and reconstruct the GeoChat COT with `senderCallsign=SENDER`, so the message displays as coming from the original sender — not from the gateway's ham callsign.
+
+Without this prefix, every chat that crosses the APRS bridge would appear in the receiving TAK environment as if it were sent by the gateway operator, losing all sender attribution.
+
+#### Parsing Rules
+
+1. Strip the addressee header (`::ADDRESSEE:`) per standard APRS.
+2. If the body starts with `TAK:`, split on `:` (max 3 parts).
+3. Field 2 is the original sender callsign — use as `senderCallsign` in the GeoChat COT.
+4. Field 3 is the message body — put in `<remarks>`.
+5. If the body does not start with `TAK:`, treat as a normal APRS message and use the gateway callsign as the sender (legacy / non-cot_radio APRS clients).
+
+#### Example Parsing
+
+```
+TAK:HAWK:Hello team
+  → senderCallsign = "HAWK"
+  → body = "Hello team"
+
+TAK:A#1:reply from mesh
+  → senderCallsign = "A#1"
+  → body = "reply from mesh"
+
+Plain APRS message from a non-cot_radio client → senderCallsign = origin gateway
+```
+
+### Routing Rules (TAK → APRS)
+
+The cot_radio implementation maps the TAK GeoChat `chatroom` field to the APRS addressee as follows:
+
+| TAK chatroom | APRS addressee | Notes |
+|--------------|----------------|-------|
+| `All Chat Rooms` | `BLN1` | Bulletin broadcast |
+| Valid amateur callsign (e.g. `KN6YYY-9`) | recipient callsign | DM to APRS station |
+| Tactical TAK callsign (e.g. `HAWK`, `FALCON`) | recipient callsign | DM cross-TAK; receiving cot_radio rebuilds GeoChat to that callsign |
+| Mesh node short name (recipient UID begins with `MESH-`) | (dropped) | No APRS equivalent — not transmitted |
 
 ---
 
@@ -191,3 +230,4 @@ The full COT type determines both the affiliation (friendly/hostile/neutral/unkn
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-04-17 | Initial specification |
+| 1.1 | 2026-04-17 | Chat: added `TAK:SENDER:` body prefix so original TAK/mesh sender is preserved across the bridge. Added explicit routing rules table for chatroom → APRS addressee mapping. Mesh-targeted DMs (recipient UID begins `MESH-`) are dropped. |
