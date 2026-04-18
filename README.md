@@ -1,6 +1,6 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-04-17
 **Author:** cot_radio project
 
@@ -19,7 +19,7 @@ Any APRS client or gateway can decode these packets as standard APRS objects. Th
 TAK entities are transmitted as APRS Objects (not position reports):
 
 ```
-ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW[TAK:CALLSIGN:TEAM:COT_TYPE:ICONSETPATH
+ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW[TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE:ICONSETPATH
 ```
 
 ### Field Breakdown
@@ -43,17 +43,17 @@ ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW[TAK:CALLSIGN:TEAM:COT_
 
 **SA Position (team member):**
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     *170230z3406.36N/11818.12W[TAK:HAWK:Cyan:a-f-G-U-C
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     *170230z3406.36N/11818.12W[TAK:BASE:HAWK:Cyan:a-f-G-U-C
 ```
 
 **Marker with custom icon:**
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;ANTELOPE *170230z3404.84N/11737.01W[TAK:ANTELOPE 1:White:a-f-G-U-C:34ae1613-9645-4222-a9d2-e5f243dea2865/Animals/antelope.png
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;ANTELOPE *170230z3404.84N/11737.01W[TAK:BASE:ANTELOPE 1:White:a-f-G-U-C:34ae1613-9645-4222-a9d2-e5f243dea2865/Animals/antelope.png
 ```
 
 **Killed (deleted) object:**
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     _170235z3406.36N/11818.12W[TAK:HAWK:Cyan:a-f-G-U-C
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     _170235z3406.36N/11818.12W[TAK:BASE:HAWK:Cyan:a-f-G-U-C
 ```
 
 ---
@@ -63,7 +63,7 @@ KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     _170235z3406.36N/11818.12W[TAK:HAWK:Cyan
 The comment field begins with the `TAK:` prefix, followed by colon-separated metadata fields:
 
 ```
-TAK:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]
+TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]
 ```
 
 ### Fields
@@ -71,34 +71,38 @@ TAK:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]
 | # | Field | Required | Description |
 |---|-------|----------|-------------|
 | 1 | `TAK` | Yes | Literal prefix — identifies this as a TAK-encoded object |
-| 2 | CALLSIGN | Yes | Full TAK callsign (not truncated). May differ from the 9-char object name. |
-| 3 | TEAM | Yes | TAK team color (e.g., `Cyan`, `White`, `Red`, `Green`). Empty string if no team. |
-| 4 | COT_TYPE | Yes | Full COT type string (MIL-STD-2525 symbology). Examples: `a-f-G-U-C` (friendly ground unit), `a-h-G` (hostile ground), `a-n-G` (neutral ground). |
-| 5 | ICONSETPATH | No | ATAK iconset path for custom icon rendering. Format: `{iconset_uid}/{group}/{filename.png}`. Only present for markers with custom icons. |
+| 2 | GATEWAY | Yes | Tactical callsign of the cot_radio gateway that emitted this packet (`identity.tactical_callsign` in settings). Must be unique across all cot_radio gateways in the network. Used by receivers to detect own emissions, attribute traffic, and de-duplicate. |
+| 3 | CALLSIGN | Yes | Full TAK callsign of the entity (not truncated). May differ from the 9-char object name. |
+| 4 | TEAM | Yes | TAK team color (e.g., `Cyan`, `White`, `Red`, `Green`). Empty string if no team. |
+| 5 | COT_TYPE | Yes | Full COT type string (MIL-STD-2525 symbology). Examples: `a-f-G-U-C` (friendly ground unit), `a-h-G` (hostile ground), `a-n-G` (neutral ground). |
+| 6 | ICONSETPATH | No | ATAK iconset path for custom icon rendering. Format: `{iconset_uid}/{group}/{filename.png}`. Only present for markers with custom icons. |
 
 ### Parsing Rules
 
 1. Check if the comment field starts with `TAK:`
 2. Split on `:` — fields are positional
 3. Field 1 is always `TAK` (literal)
-4. Field 2 is the full callsign
-5. Field 3 is the team color (may be empty string between colons)
-6. Field 4 is the COT type
-7. Field 5 (optional) is the iconset path — if present, it contains `/` characters which should NOT be confused with the `:` delimiter
+4. Field 2 is the gateway tactical callsign
+5. Field 3 is the full entity callsign
+6. Field 4 is the team color (may be empty string between colons)
+7. Field 5 is the COT type
+8. Field 6 (optional) is the iconset path — if present, it contains `/` characters which should NOT be confused with the `:` delimiter
 
 ### Example Parsing
 
 ```
-TAK:HAWK:Cyan:a-f-G-U-C
-  → callsign = "HAWK"
-  → team = "Cyan"
-  → cot_type = "a-f-G-U-C"
+TAK:BASE:HAWK:Cyan:a-f-G-U-C
+  → gateway    = "BASE"
+  → callsign   = "HAWK"
+  → team       = "Cyan"
+  → cot_type   = "a-f-G-U-C"
   → iconsetpath = (none)
 
-TAK:ANTELOPE 1::a-u-G:34ae1613.../Animals/antelope.png
-  → callsign = "ANTELOPE 1"
-  → team = "" (empty)
-  → cot_type = "a-u-G"
+TAK:RELAY-7:ANTELOPE 1::a-u-G:34ae1613.../Animals/antelope.png
+  → gateway    = "RELAY-7"
+  → callsign   = "ANTELOPE 1"
+  → team       = "" (empty)
+  → cot_type   = "a-u-G"
   → iconsetpath = "34ae1613.../Animals/antelope.png"
 ```
 
@@ -131,45 +135,51 @@ TAK chat messages are encoded as standard APRS messages with a TAK sender prefix
 
 ### All Chat → APRS Bulletin
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:HAWK:hello world
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:BASE:HAWK:hello world
 ```
 
 ### Direct Message → APRS DM
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :TAK:HAWK:reply text{42
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :TAK:BASE:HAWK:reply text{42
 ```
 
 | Field | Description |
 |-------|-------------|
 | `::` | APRS message data type (double colon) |
 | Addressee | 9-char space-padded recipient callsign. `BLN1` = bulletin (broadcast). |
-| Message | `TAK:SENDER:body` — sender prefix preserves the original TAK/mesh callsign across the bridge |
+| Message | `TAK:GATEWAY:SENDER:body` — gateway tactical + original sender + body |
 | `{ID` | Optional message ID for ack/rej (e.g., `{42`) |
 
-### TAK Sender Prefix
+### TAK Body Prefix
 
-The message body begins with `TAK:SENDER:` where SENDER is the original TAK callsign (or mesh node short name) of whoever sent the chat message inside the originating TAK environment. Receiving cot_radio gateways parse this prefix and reconstruct the GeoChat COT with `senderCallsign=SENDER`, so the message displays as coming from the original sender — not from the gateway's ham callsign.
+The message body begins with `TAK:GATEWAY:SENDER:` where:
 
-Without this prefix, every chat that crosses the APRS bridge would appear in the receiving TAK environment as if it were sent by the gateway operator, losing all sender attribution.
+- **GATEWAY** — tactical callsign of the cot_radio gateway that emitted this packet (`identity.tactical_callsign`). Lets receivers detect own emissions and route attribution correctly.
+- **SENDER** — original TAK callsign (or mesh node short name) of whoever sent the chat in the originating TAK environment.
+
+Receiving cot_radio gateways parse this prefix and reconstruct the GeoChat COT with `senderCallsign=SENDER`, so the message displays as coming from the original sender — not from the gateway's ham callsign.
 
 #### Parsing Rules
 
 1. Strip the addressee header (`::ADDRESSEE:`) per standard APRS.
-2. If the body starts with `TAK:`, split on `:` (max 3 parts).
-3. Field 2 is the original sender callsign — use as `senderCallsign` in the GeoChat COT.
-4. Field 3 is the message body — put in `<remarks>`.
-5. If the body does not start with `TAK:`, treat as a normal APRS message and use the gateway callsign as the sender (legacy / non-cot_radio APRS clients).
+2. If the body starts with `TAK:`, split on `:` (max 4 parts).
+3. Field 2 is the gateway tactical callsign.
+4. Field 3 is the original sender callsign — use as `senderCallsign` in the GeoChat COT.
+5. Field 4 is the message body — put in `<remarks>`.
+6. If the body does not start with `TAK:`, treat as a normal APRS message and use the gateway callsign as the sender (legacy / non-cot_radio APRS clients).
 
 #### Example Parsing
 
 ```
-TAK:HAWK:Hello team
+TAK:BASE:HAWK:Hello team
+  → gateway        = "BASE"
   → senderCallsign = "HAWK"
-  → body = "Hello team"
+  → body           = "Hello team"
 
-TAK:A#1:reply from mesh
+TAK:RELAY-7:A#1:reply from mesh
+  → gateway        = "RELAY-7"
   → senderCallsign = "A#1"
-  → body = "reply from mesh"
+  → body           = "reply from mesh"
 
 Plain APRS message from a non-cot_radio client → senderCallsign = origin gateway
 ```
@@ -231,3 +241,4 @@ The full COT type determines both the affiliation (friendly/hostile/neutral/unkn
 |---------|------|---------|
 | 1.0 | 2026-04-17 | Initial specification |
 | 1.1 | 2026-04-17 | Chat: added `TAK:SENDER:` body prefix so original TAK/mesh sender is preserved across the bridge. Added explicit routing rules table for chatroom → APRS addressee mapping. Mesh-targeted DMs (recipient UID begins `MESH-`) are dropped. |
+| 1.2 | 2026-04-17 | Added `GATEWAY` field as the second element of every TAK: prefix on both objects and chat. GATEWAY is the emitting gateway's `identity.tactical_callsign` — must be unique across the network. Lets receivers detect own emissions, attribute traffic, and de-duplicate. Object format: `TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]`. Chat format: `TAK:GATEWAY:SENDER:body`. Backwards compatible: receivers should accept v1.1 format (no GATEWAY) and v1.0 format (no TAK: prefix). |
