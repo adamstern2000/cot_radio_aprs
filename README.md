@@ -1,6 +1,6 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 1.3
+**Version:** 1.4
 **Date:** 2026-04-20
 **Author:** cot_radio project
 
@@ -80,13 +80,14 @@ TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]
 ### Parsing Rules
 
 1. Check if the comment field starts with `TAK:`
-2. Split on `:` — fields are positional
-3. Field 1 is always `TAK` (literal)
-4. Field 2 is the gateway tactical callsign
-5. Field 3 is the full entity callsign
-6. Field 4 is the team color (may be empty string between colons)
-7. Field 5 is the COT type
-8. Field 6 (optional) is the iconset path — if present, it contains `/` characters which should NOT be confused with the `:` delimiter
+2. **v1.4:** if the comment contains the separator ` | ` (space-pipe-space), treat everything from the first ` | ` onward as a **human-readable tail** and strip it BEFORE the colon split. The tail may contain its own colons (e.g. `DM:KN6ZPL-7 DUSTY`) and must not corrupt the wire fields.
+3. Split the remaining wire prefix on `:` — fields are positional
+4. Field 1 is always `TAK` (literal)
+5. Field 2 is the gateway tactical callsign
+6. Field 3 is the full entity callsign
+7. Field 4 is the team color (may be empty string between colons)
+8. Field 5 is the COT type
+9. Field 6 (optional) is the iconset path — if present, it contains `/` characters which should NOT be confused with the `:` delimiter
 
 ### Example Parsing
 
@@ -104,7 +105,64 @@ TAK:RELAY-7:ANTELOPE 1::a-u-G:34ae1613.../Animals/antelope.png
   → team       = "" (empty)
   → cot_type   = "a-u-G"
   → iconsetpath = "34ae1613.../Animals/antelope.png"
+
+TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I | DM:KN6ZPL-7 DUSTY
+  (v1.4 — hint tail stripped first)
+  → wire prefix = "TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I"
+  → hint        = "DM:KN6ZPL-7 DUSTY"
+  → gateway     = "BASE"
+  → callsign    = "DUSTY"
+  → team        = "Cyan"
+  → cot_type    = "a-f-G-U-C-I"
+  → iconsetpath = (none)
 ```
+
+---
+
+## Human-Readable Hint Tail (v1.4)
+
+Starting in v1.4, emitters MAY append a short human-readable tail to the APRS object comment, separated from the wire prefix by ` | ` (space-pipe-space). The tail is intended for APRS operators viewing a TAK entity on plain APRS clients (aprs.fi, YAAC, APRSIS32) — it tells them how to reach the entity by DM, or any other operator-configurable message.
+
+### Wire Format
+
+```
+TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH] | <human-readable text>
+```
+
+### Typical Use — DM Hint on SA Objects
+
+A cot_radio gateway bridging a TAK team member onto APRS tells APRS operators how to message them back:
+
+```
+;DUSTY    *201430z3406.35N/11818.10W[TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I | DM:KN6ZPL-7 DUSTY
+```
+
+An APRS operator seeing DUSTY on aprs.fi reads the comment as "DM KN6ZPL-7 with 'DUSTY <message>' to reach this person." The TAK wire prefix before the ` | ` is ignored by the APRS operator; the hint after the ` | ` is ignored by cot_radio parsers.
+
+### Emitter Guidance
+
+- Applied to **SA / live-participant objects only** — not to placed markers, which are not chattable.
+- Kept short to fit inside the APRS practical comment cap (~67 bytes). The standard template `DM:{callsign} {target}` renders to ~17 chars for common callsigns.
+- Supports placeholder substitution: `{callsign}` = emitting gateway, `{target}` = TAK entity callsign.
+- Operator-configurable on cot_radio in the admin UI (IGate section → "SA Comment Hint"). Empty template disables the tail entirely.
+
+### Receiver Requirements
+
+Any v1.2+ parser implementation MUST strip the ` | ` tail BEFORE the colon split. Otherwise the hint corrupts the `cot_type` and/or `iconsetpath` fields (since the hint itself may contain colons like `DM:`). Pseudocode:
+
+```python
+if " | " in comment:
+    comment = comment[:comment.index(" | ")]
+parts = comment.split(":", 5)
+# ... proceed with standard positional parsing
+```
+
+Receivers MAY additionally parse and display the hint for debugging, but MUST NOT treat it as authoritative TAK data. The wire prefix is the only source of truth.
+
+### Backwards Compatibility
+
+- v1.2 / v1.3 receivers that haven't implemented the ` | ` strip will silently misparse v1.4-emitted comments. Update parsers before running mixed networks.
+- v1.4 receivers correctly handle v1.2 / v1.3 comments without the tail (nothing to strip).
 
 ---
 
@@ -317,3 +375,4 @@ The full COT type determines both the affiliation (friendly/hostile/neutral/unkn
 | 1.1 | 2026-04-17 | Chat: added `TAK:SENDER:` body prefix so original TAK/mesh sender is preserved across the bridge. Added explicit routing rules table for chatroom → APRS addressee mapping. Mesh-targeted DMs (recipient UID begins `MESH-`) are dropped. |
 | 1.2 | 2026-04-17 | Added `GATEWAY` field as the second element of every TAK: prefix on both objects and chat. GATEWAY is the emitting gateway's `identity.tactical_callsign` — must be unique across the network. Lets receivers detect own emissions, attribute traffic, and de-duplicate. Object format: `TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]`. Chat format: `TAK:GATEWAY:SENDER:body`. Backwards compatible: receivers should accept v1.1 format (no GATEWAY) and v1.0 format (no TAK: prefix). |
 | 1.3 | 2026-04-20 | Added **v1.3 relay prefix** for bidirectional group chat (TAK All Chat ↔ APRS BLN1). Format `TAK:HHUUUUUU:SENDER:body` where `HH` is a 1-char hop count and `UUUUUU` is a 6-char UUID6. Adds multi-part marker `(n/N)` for bodies > 60 chars, hop-count limit (default 2), UUID cache for cross-gateway loop prevention (default 300 s TTL), reassembly timeout (default 30 s), and origin-labeled body prefix `<SENDER> | APRS <class>: ` on delivery. v1.2 object/DM format is unchanged and coexists with v1.3 on the wire — receivers distinguish by the shape of field 2 (exactly 7 hex chars = v1.3 relay). APRS-to-APRS DMs between third-party hams are not bridged to TAK unless `bridge_aprs_chatter=true`. |
+| 1.4 | 2026-04-20 | Added **human-readable hint tail** on object comments — anything after ` | ` (space-pipe-space) is free-form text for APRS operators viewing the entity on plain APRS clients. Typical use: `TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I \| DM:KN6ZPL-7 DUSTY` tells an APRS op how to DM the TAK participant via the gateway. Parsers MUST strip the ` \| ` tail BEFORE the colon split (tail may itself contain colons like `DM:`). Emitters apply the tail to SA / live-participant objects only, not placed markers. Operator-configurable on cot_radio (admin UI → IGate → "SA Comment Hint"). Backwards compatible: v1.4 receivers correctly parse v1.2/v1.3 comments with no tail; older parsers silently misparse v1.4-emitted comments until updated. |
