@@ -1,7 +1,7 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 1.2
-**Date:** 2026-04-17
+**Version:** 1.3
+**Date:** 2026-04-20
 **Author:** cot_radio project
 
 ## Overview
@@ -131,14 +131,19 @@ The full unmodified callsign is preserved in the TAK comment field (field 2).
 
 ## APRS Message Encoding
 
-TAK chat messages are encoded as standard APRS messages with a TAK sender prefix in the body:
+TAK chat messages are encoded as standard APRS messages with a TAK sender prefix in the body. Two prefix formats coexist:
 
-### All Chat → APRS Bulletin
+- **v1.2 object/DM prefix** — `TAK:GATEWAY:SENDER:body` — used for DMs cross-TAK where the receiver must rebuild a specific senderCallsign.
+- **v1.3 relay prefix** — `TAK:HHUUUUUU:SENDER:body` — used for bidirectional group-chat relay (TAK All Chat ↔ APRS BLN1). The second field is a 7-char hex token (1 hop digit + 6 hex UUID) for loop prevention and multi-gateway coordination.
+
+Receivers distinguish the two by the shape of the second field: **exactly 7 hex chars = v1.3 relay**; anything else = v1.2 (or v1.0 plain APRS).
+
+### All Chat → APRS Bulletin (v1.3 relay)
 ```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:BASE:HAWK:hello world
+KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:0a1b2c3:HAWK:hello world
 ```
 
-### Direct Message → APRS DM
+### Direct Message → APRS DM (v1.2)
 ```
 KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :TAK:BASE:HAWK:reply text{42
 ```
@@ -188,12 +193,81 @@ Plain APRS message from a non-cot_radio client → senderCallsign = origin gatew
 
 The cot_radio implementation maps the TAK GeoChat `chatroom` field to the APRS addressee as follows:
 
-| TAK chatroom | APRS addressee | Notes |
-|--------------|----------------|-------|
-| `All Chat Rooms` | `BLN1` | Bulletin broadcast |
-| Valid amateur callsign (e.g. `KN6YYY-9`) | recipient callsign | DM to APRS station |
-| Tactical TAK callsign (e.g. `HAWK`, `FALCON`) | recipient callsign | DM cross-TAK; receiving cot_radio rebuilds GeoChat to that callsign |
-| Mesh node short name (recipient UID begins with `MESH-`) | (dropped) | No APRS equivalent — not transmitted |
+| TAK chatroom | APRS addressee | Prefix | Notes |
+|--------------|----------------|--------|-------|
+| `All Chat Rooms` | `BLN1` | v1.3 relay | Bulletin broadcast; hop=0, fresh UUID |
+| Valid amateur callsign (e.g. `KN6YYY-9`) | recipient callsign | v1.2 object | DM to APRS station |
+| Tactical TAK callsign (e.g. `HAWK`, `FALCON`) | recipient callsign | v1.2 object | DM cross-TAK; receiving cot_radio rebuilds GeoChat to that callsign |
+| Mesh node short name (recipient UID begins with `MESH-`) | (dropped) | — | No APRS equivalent — not transmitted |
+
+---
+
+## v1.3 Relay Prefix — Group-Chat Bidirectional Relay
+
+The v1.3 relay prefix supports **multi-gateway group chat** (TAK All Chat ↔ APRS BLN1) with loop prevention, hop limits, and multi-part reassembly for bodies longer than the APRS 67-char message cap.
+
+### Prefix Format
+
+```
+TAK:HHUUUUUU:SENDER:BODY
+```
+
+| Segment | Length | Format | Purpose |
+|---------|--------|--------|---------|
+| `TAK:` | 4 | Literal | Identifies a cot_radio extension |
+| `HH` | 1 hex char | `0`–`9`, `a`–`f` | Hop count (0–15). Emitter sets 0; each re-relay increments by 1. Dropped once count ≥ `bridge_max_hops`. |
+| `UUUUUU` | 6 hex chars | `0`–`9`, `a`–`f` | UUID6 — random per-message identifier for cross-gateway loop prevention |
+| `:` | 1 | Literal | Delimiter |
+| `SENDER` | 1+ | any non-`:` | Original TAK callsign (or mesh short-name) of whoever said it in TAK |
+| `:` | 1 | Literal | Delimiter |
+| `BODY` | 0+ | any | The message. May start with a multi-part marker (see below). |
+
+**Identification regex:** `^TAK:([0-9a-fA-F]{7}):([^:]+):(.*)` with DOTALL. The 7-hex-char second field is the distinguishing feature — parsers check this shape first; if it doesn't match, fall back to v1.2 parsing (`TAK:GATEWAY:SENDER:body` with arbitrary GATEWAY).
+
+### Multi-Part Marker
+
+Bodies longer than 60 characters are split across multiple APRS messages. Each segment's body is prefixed with a one-based count marker:
+
+```
+(n/N) segment text
+```
+
+Where `n` is the 1-based segment number and `N` is the total segment count. Both segments share the same UUID so receivers can reassemble:
+
+```
+KN6ZPL-7>APRS::BLN1     :TAK:0a1b2c3:HAWK:(1/2) first part of a long message that doesn't fit
+KN6ZPL-7>APRS::BLN1     :TAK:0a1b2c3:HAWK:(2/2) and here is the second part
+```
+
+**Segment limit:** 60 chars body + 15 chars prefix ≈ 67 total. Max 5 segments per message (longer bodies are ellipsis-truncated at the emitter).
+
+### Receiver Behaviour
+
+1. **UUID de-dup.** Maintain an LRU cache `{uuid → first_seen_ts}`, TTL = `uuid_cache_ttl_s` (default 300). If a UUID has been seen within TTL, drop the duplicate.
+2. **Hop-count drop.** If `hop ≥ bridge_max_hops` (default 2), do not re-relay — deliver locally only.
+3. **Reassembly.** Group segments by UUID; deliver to TAK when all parts arrive or after `reassembly_timeout_s` (default 30), inserting `[part N missing]` for gaps.
+4. **Re-relay.** If the gateway has `bridge_tak_broadcast_to_aprs=true` and `hop < bridge_max_hops`, retransmit the segment(s) to APRS with hop+1 and the **same UUID**. The UUID is pre-observed in the local cache before emission so the gateway does not re-relay its own output.
+5. **Origin display.** Delivered group-chat bodies are prefixed with `<SENDER> | APRS <class>: ` in the TAK `<remarks>` (where class ∈ `Bulletin`, `NWS`, `Announcement`, `APRS`). Operators can disable via `prefix_group_origin=false`.
+
+### Emitter Behaviour (TAK All Chat → APRS)
+
+When a TAK chat packet arrives with `chatroom="All Chat Rooms"`:
+
+1. Generate a fresh `uuid6` (6 random hex chars) and set hop `0`.
+2. Split the body into 60-char segments on space boundaries where possible; ellipsis-truncate to 5 segments max.
+3. Prepend `(n/N) ` to each segment.
+4. For each segment, emit `TAK:0UUUUUU:SENDER:(n/N) body` to APRS addressee `BLN1`.
+5. Pre-observe the UUID in the local cache so the re-relay path does not re-emit own traffic.
+
+### Loop Prevention Guarantees
+
+- **Single gateway, echoed via digipeater:** UUID cache catches it on the first receive.
+- **Two gateways in mutual view:** Gateway A emits (hop=0). Gateway B receives, delivers, re-relays (hop=1). Gateway A receives B's packet, UUID matches cache — dropped. Gateway B receives its own packet, UUID matches — dropped.
+- **Three gateways chained (A→B→C):** A emits hop=0; B re-emits hop=1; C re-emits hop=2. If `bridge_max_hops=2`, C delivers but does not re-relay.
+
+### Default Behaviour for APRS-to-APRS Chatter
+
+v1.3 relay is **one-way by default** for plain APRS-to-APRS DMs: a DM between two amateur callsigns (neither of which has a live TAK equivalent) is **not** bridged to TAK unless the operator sets `bridge_aprs_chatter=true`. This keeps unrelated third-party ham conversations off TAK screens.
 
 ---
 
@@ -242,3 +316,4 @@ The full COT type determines both the affiliation (friendly/hostile/neutral/unkn
 | 1.0 | 2026-04-17 | Initial specification |
 | 1.1 | 2026-04-17 | Chat: added `TAK:SENDER:` body prefix so original TAK/mesh sender is preserved across the bridge. Added explicit routing rules table for chatroom → APRS addressee mapping. Mesh-targeted DMs (recipient UID begins `MESH-`) are dropped. |
 | 1.2 | 2026-04-17 | Added `GATEWAY` field as the second element of every TAK: prefix on both objects and chat. GATEWAY is the emitting gateway's `identity.tactical_callsign` — must be unique across the network. Lets receivers detect own emissions, attribute traffic, and de-duplicate. Object format: `TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]`. Chat format: `TAK:GATEWAY:SENDER:body`. Backwards compatible: receivers should accept v1.1 format (no GATEWAY) and v1.0 format (no TAK: prefix). |
+| 1.3 | 2026-04-20 | Added **v1.3 relay prefix** for bidirectional group chat (TAK All Chat ↔ APRS BLN1). Format `TAK:HHUUUUUU:SENDER:body` where `HH` is a 1-char hop count and `UUUUUU` is a 6-char UUID6. Adds multi-part marker `(n/N)` for bodies > 60 chars, hop-count limit (default 2), UUID cache for cross-gateway loop prevention (default 300 s TTL), reassembly timeout (default 30 s), and origin-labeled body prefix `<SENDER> | APRS <class>: ` on delivery. v1.2 object/DM format is unchanged and coexists with v1.3 on the wire — receivers distinguish by the shape of field 2 (exactly 7 hex chars = v1.3 relay). APRS-to-APRS DMs between third-party hams are not bridged to TAK unless `bridge_aprs_chatter=true`. |
