@@ -1,378 +1,389 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 1.4
-**Date:** 2026-04-20
-**Author:** cot_radio project
+**Version:** 2.0 (draft)
+**Date:** 2026-04-24
+**Status:** Breaking change vs v1.x — no backwards compatibility.
 
-## Overview
-
-This document describes how cot_radio encodes TAK (Team Awareness Kit) entity data within standard APRS packets. The encoding uses the APRS Object format with a structured comment field that carries TAK-specific metadata for round-trip fidelity between TAK and APRS systems.
-
-Any APRS client or gateway can decode these packets as standard APRS objects. The TAK metadata in the comment field is optional — clients that don't understand it simply display the object normally.
+This document is **self-contained**. Every code on the wire is defined here, in plain English, so any licensed amateur radio operator can decode what they hear on the air without consulting external sources. This satisfies FCC Part 97 §97.113(a)(4) which prohibits "codes or ciphers intended to obscure the meaning" of a transmission. Compressed is not obscured — these tables make the meaning of every code unambiguous.
 
 ---
 
-## Packet Format
+## 1. Why v2.0
 
-### APRS Object (Position)
+Amateur radio APRS channels are bandwidth-limited. HF digital modes are even more so. v1.x of this protocol used full English names (`TAK:ST1:FALCON:Cyan:a-f-G-U-C`) = 29 characters for a basic situational-awareness beacon. v2.0 compresses the same information to 19 characters while keeping every value decodable from this document.
 
-TAK entities are transmitted as APRS Objects (not position reports):
+Typical savings:
 
-```
-ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW[TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE:ICONSETPATH
-```
+- SA (team member beacon): 47 bytes → 19 bytes
+- Marker with custom icon: 70-100 bytes → 24 bytes
+- Chat bulletin: 22 bytes → 20 bytes
 
-### Field Breakdown
-
-| Field | Position | Format | Description |
-|-------|----------|--------|-------------|
-| ORIGINATOR | Header | Callsign-SSID | Gateway's ham callsign + SSID (e.g., `KN6ZPL-7`) |
-| APRS | Header | Literal | APRS destination tocall |
-| PATH | Header | Comma-separated | Digipeater path (e.g., `WIDE1-1,WIDE2-1`) |
-| `;` | Byte 1 | Literal | APRS Object data type identifier |
-| NAME | Bytes 2-10 | 9 chars, space-padded | Display name — TAK callsign with periods stripped, truncated to 9 chars |
-| `*` or `_` | Byte 11 | Literal | `*` = live object, `_` = killed (deleted) object |
-| TIMESTAMP | Bytes 12-18 | `DDHHMMz` | UTC day-hour-minute with `z` suffix |
-| LATITUDE | Bytes 19-26 | `DDMM.MMN` | Latitude in degrees-minutes, N/S suffix |
-| SYMBOL TABLE | Byte 27 | Single char | `/` = primary table, `\` = alternate table |
-| LONGITUDE | Bytes 28-36 | `DDDMM.MMW` | Longitude in degrees-minutes, E/W suffix |
-| SYMBOL CODE | Byte 37 | Single char | APRS symbol character (e.g., `[` = person) |
-| COMMENT | Remaining | Free text | TAK metadata (see below) |
-
-### Example Packets
-
-**SA Position (team member):**
-```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     *170230z3406.36N/11818.12W[TAK:BASE:HAWK:Cyan:a-f-G-U-C
-```
-
-**Marker with custom icon:**
-```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;ANTELOPE *170230z3404.84N/11737.01W[TAK:BASE:ANTELOPE 1:White:a-f-G-U-C:34ae1613-9645-4222-a9d2-e5f243dea2865/Animals/antelope.png
-```
-
-**Killed (deleted) object:**
-```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1:;HAWK     _170235z3406.36N/11818.12W[TAK:BASE:HAWK:Cyan:a-f-G-U-C
-```
+v1.x and v2.0 are not interoperable. Operators upgrade all gateways on their network at once.
 
 ---
 
-## TAK Comment Field
+## 2. Object Format (Situational Awareness + Markers)
 
-The comment field begins with the `TAK:` prefix, followed by colon-separated metadata fields:
-
-```
-TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]
-```
-
-### Fields
-
-| # | Field | Required | Description |
-|---|-------|----------|-------------|
-| 1 | `TAK` | Yes | Literal prefix — identifies this as a TAK-encoded object |
-| 2 | GATEWAY | Yes | Tactical callsign of the cot_radio gateway that emitted this packet (`identity.tactical_callsign` in settings). Must be unique across all cot_radio gateways in the network. Used by receivers to detect own emissions, attribute traffic, and de-duplicate. |
-| 3 | CALLSIGN | Yes | Full TAK callsign of the entity (not truncated). May differ from the 9-char object name. |
-| 4 | TEAM | Yes | TAK team color (e.g., `Cyan`, `White`, `Red`, `Green`). Empty string if no team. |
-| 5 | COT_TYPE | Yes | Full COT type string (MIL-STD-2525 symbology). Examples: `a-f-G-U-C` (friendly ground unit), `a-h-G` (hostile ground), `a-n-G` (neutral ground). |
-| 6 | ICONSETPATH | No | ATAK iconset path for custom icon rendering. Format: `{iconset_uid}/{group}/{filename.png}`. Only present for markers with custom icons. |
-
-### Parsing Rules
-
-1. Check if the comment field starts with `TAK:`
-2. **v1.4:** if the comment contains the separator ` | ` (space-pipe-space), treat everything from the first ` | ` onward as a **human-readable tail** and strip it BEFORE the colon split. The tail may contain its own colons (e.g. `DM:KN6ZPL-7 DUSTY`) and must not corrupt the wire fields.
-3. Split the remaining wire prefix on `:` — fields are positional
-4. Field 1 is always `TAK` (literal)
-5. Field 2 is the gateway tactical callsign
-6. Field 3 is the full entity callsign
-7. Field 4 is the team color (may be empty string between colons)
-8. Field 5 is the COT type
-9. Field 6 (optional) is the iconset path — if present, it contains `/` characters which should NOT be confused with the `:` delimiter
-
-### Example Parsing
+Object packets follow the standard APRS Object format. The APRS "comment" field carries the TAK metadata.
 
 ```
-TAK:BASE:HAWK:Cyan:a-f-G-U-C
-  → gateway    = "BASE"
-  → callsign   = "HAWK"
-  → team       = "Cyan"
-  → cot_type   = "a-f-G-U-C"
-  → iconsetpath = (none)
-
-TAK:RELAY-7:ANTELOPE 1::a-u-G:34ae1613.../Animals/antelope.png
-  → gateway    = "RELAY-7"
-  → callsign   = "ANTELOPE 1"
-  → team       = "" (empty)
-  → cot_type   = "a-u-G"
-  → iconsetpath = "34ae1613.../Animals/antelope.png"
-
-TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I | DM:KN6ZPL-7 DUSTY
-  (v1.4 — hint tail stripped first)
-  → wire prefix = "TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I"
-  → hint        = "DM:KN6ZPL-7 DUSTY"
-  → gateway     = "BASE"
-  → callsign    = "DUSTY"
-  → team        = "Cyan"
-  → cot_type    = "a-f-G-U-C-I"
-  → iconsetpath = (none)
+ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW<s><c>TAK<NN><T><R><TTTTTT>:CALLSIGN[:ICON]
+                                                               └────── packed prefix ──────┘
 ```
+
+- **ORIGINATOR** — the ham radio callsign + SSID of the gateway sending this packet (FCC-licensed callsign, required for Part 97 identification).
+- **PATH** — standard APRS digipeater path, typically `WIDE1-1,WIDE2-1`.
+- **NAME** — the object name, exactly 9 characters, right-padded with spaces. This is the TAK callsign with periods stripped and truncated to 9 chars.
+- **DDHHMMz** — APRS timestamp (day, hour, minute, UTC).
+- **DDMM.MMN/DDDMM.MMW** — latitude/longitude in standard APRS format.
+- **`<s>`** — APRS symbol table (`/` or `\`).
+- **`<c>`** — APRS symbol code character.
+- Everything after that is the v2.0 packed prefix (fixed-width) + optional variable fields.
+
+### 2.1 The Packed Prefix (13 characters)
+
+| Position | Width | Name | What it is |
+|---|---|---|---|
+| 1-3 | 3 | `TAK` | Literal prefix. Marks this packet as carrying v2.0 TAK metadata. |
+| 4-5 | 2 | `NN` | Station number (2 digits, `00`-`99`). The gateway's self-assigned station number. Each gateway in a network picks a unique number (see §7 echo suppression). |
+| 6 | 1 | `T` | Team color letter (`A`-`N`, see §2.2). |
+| 7 | 1 | `R` | Role letter (`A`-`Z`, see §2.3). |
+| 8-13 | 6 | `TTTTTT` | COT type (entity classification, see §2.4). Exactly 6 characters, lowercase letters and underscores. |
+
+After the 13-character packed prefix, there is a `:` delimiter, then the variable-length CALLSIGN field, optionally followed by another `:` and an ICON code.
+
+### 2.2 Team Color — Single Letter `T`
+
+The team color letter serves **two purposes** depending on the packet's COT type:
+
+- **For situational awareness beacons (`a-*` types):** the team the operator belongs to. Rendered as the team-color affiliation icon (person-in-color on TAK clients).
+- **For markers (`b-*` and `u-*` types):** the color tint applied to the custom icon. A marker with icon `D054` (car) and team letter `E` renders as a red-tinted car.
+
+One letter, two uses — saves a separate "icon color" field on the wire.
+
+| Letter | Color name | RGB hex | ARGB (TAK wire format, signed 32-bit int) |
+|---|---|---|---|
+| A | White       | `#FFFFFF` | -1         |
+| B | Yellow      | `#FFFF00` | -256       |
+| C | Orange      | `#FF8C00` | -7636      |
+| D | Magenta     | `#FF00FF` | -65281     |
+| E | Red         | `#FF0000` | -65536     |
+| F | Maroon      | `#7F0000` | -8454144   |
+| G | Purple      | `#800080` | -8388480   |
+| H | Dark Blue   | `#000080` | -16777088  |
+| I | Blue        | `#0000FF` | -16776961  |
+| J | Cyan        | `#00FFFF` | -16711681  |
+| K | Teal        | `#008080` | -16744320  |
+| L | Green       | `#00FF00` | -16711936  |
+| M | Dark Green  | `#008000` | -16744448  |
+| N | Brown       | `#A52A2A` | -5952982   |
+
+**Null value:** the character `_` (underscore) at position 6 means "no team color / no tint specified." For SA this is treated as `Green` (default team) with a warning. For markers this means the icon renders with no color tint (the icon's natural colors). Emitters MAY use `_` when the source entity has no assigned team.
+
+If a receiver sees a letter outside `A`-`N` and not `_` (currently `O`-`Z` are reserved for future colors), it substitutes `Green` (letter `L`) and logs a warning.
+
+### 2.3 Role — Single Letter `R`
+
+The operator's role on the team. Rendered as a text label and affects icon variant on TAK clients.
+
+| Letter | Role name | Meaning |
+|---|---|---|
+| M | Team Member | Default. Regular participant in the team. |
+| L | Team Lead | Leader of the team or unit. |
+| H | HQ | Headquarters / command element. Coordinates multiple teams. |
+| R | RTO | Radio Telephone Operator. Handles communications. |
+| K | K9 | Dog handler (canine team). |
+| F | Forward Observer | Observation / reconnaissance / spotting. |
+| S | Sniper | Designated marksman / sharpshooter. |
+| D | Medic | Combat medic / emergency medical technician. |
+
+If a receiver sees a letter outside this table, it substitutes `Team Member` (letter `M`) and logs a warning.
+
+### 2.4 COT Type — 6 Characters `TTTTTT`
+
+The COT type is the classification of the entity being reported. COT (Cursor on Target) uses a dot-separated hierarchy like `a-f-G-U-C` — "atom, friendly, ground, unit, combat". v2.0 strips the dashes and pads with underscores to exactly 6 characters.
+
+#### 2.4.1 Encoding Rule
+
+1. Start with the canonical dashed string (e.g. `a-f-G-U-C`).
+2. Remove all `-` characters (`afGUC`).
+3. Lowercase the result (`afguc`).
+4. Right-pad with `_` to exactly 6 characters (`afguc_`).
+5. If the stripped string exceeds 6 characters, truncate to 6 (losing the final specificity). This is rare — only the deepest sub-classifications exceed 6.
+
+#### 2.4.2 Position Meanings (for interpreting any code)
+
+Position 1 — **entity class**:
+
+| Char | Meaning |
+|---|---|
+| `a` | Atom: a unit, person, or vehicle with a position (SA beacons, contacts) |
+| `b` | Bit: a momentary event or alert (emergency, spot marker) |
+| `u` | User graphic: a drawn shape or route (polygon, line, rectangle, circle, route) |
+| `t` | Tasking / orders |
+| `r` | Reply / acknowledgment |
+
+Position 2 (for `a-*` entities) — **affiliation**:
+
+| Char | Meaning |
+|---|---|
+| `f` | Friendly |
+| `h` | Hostile |
+| `n` | Neutral |
+| `u` | Unknown |
+| `p` | Pending (not yet identified) |
+| `s` | Suspect (probably hostile, not confirmed) |
+| `a` | Assumed friend |
+
+Position 3 (for `a-*-X`) — **battle dimension**:
+
+| Char | Meaning |
+|---|---|
+| `G` | Ground (land-based) |
+| `A` | Air (aircraft) |
+| `S` | Sea surface (ship) |
+| `U` | Subsurface (submarine) |
+| `P` | Space |
+| `F` | Special forces |
+
+Position 4+ (for `a-*-G-*`) — **function, ground**:
+
+| Char | Meaning |
+|---|---|
+| `U` | Unit (organized group or person) |
+| `E` | Equipment (vehicle or machine) |
+| `I` | Installation (fixed facility) |
+
+Position 5+ (for `a-*-G-U-*`, ground units) — **specialty**:
+
+| Char | Meaning |
+|---|---|
+| `C` | Combat (infantry, armor) |
+| `S` | Combat Support |
+| `X` | Combat Service Support (logistics) |
+
+Position 6+ (for `a-*-G-U-C-*`, ground combat) — **unit type**:
+
+| Char | Meaning |
+|---|---|
+| `I` | Infantry |
+| `A` | Armor |
+| `F` | Artillery |
+| `R` | Reconnaissance |
+
+#### 2.4.3 Reference Table — Every COT Type This Protocol Emits
+
+This table is the complete set of COT types cot_radio_aprs v2.0 encodes on the wire. Receivers map the 6-char encoding to canonical form using this table.
+
+| 6-char | Canonical dashed | Plain English |
+|---|---|---|
+| `afguc_` | a-f-G-U-C | Friendly ground unit, combat (infantry, default for team members) |
+| `afguci` | a-f-G-U-C-I | Friendly ground infantry (specific) |
+| `afgevc` | a-f-G-E-V-C | Friendly ground civilian vehicle (car) |
+| `afgevm` | a-f-G-E-V-M | Friendly ground military vehicle |
+| `afamf_` | a-f-A-M-F | Friendly aircraft, military, fixed-wing |
+| `afamh_` | a-f-A-M-H | Friendly aircraft, military, helicopter |
+| `afscl_` | a-f-S-C-L | Friendly ship, combat, large |
+| `afscm_` | a-f-S-C-M | Friendly ship, combat, medium |
+| `afscs_` | a-f-S-C-S | Friendly ship, combat, small |
+| `ahg___` | a-h-G | Hostile ground (generic) |
+| `ang___` | a-n-G | Neutral ground |
+| `aug___` | a-u-G | Unknown ground |
+| `apg___` | a-p-G | Pending ground (not yet identified) |
+| `asg___` | a-s-G | Suspect ground (probably hostile) |
+| `baotbl` | b-a-o-tbl | Emergency alert — 911 Alert (highest priority) |
+| `baopan` | b-a-o-pan | Emergency alert — Ring The Bell |
+| `baoabn` | b-a-o-abn | Emergency alert — Absence Notification |
+| `bmpsm_` | b-m-p-s-m | Marker — spot (a placed point of interest) |
+| `udf___` | u-d-f | User-drawn polygon or freehand line |
+| `udr___` | u-d-r | User-drawn rectangle |
+| `udc___` | u-d-c | User-drawn circle or ellipse |
+| `urb___` | u-r-b | Range ring / bullseye |
+| `bmr___` | b-m-r | Route (multi-waypoint path) |
+
+Emergency is encoded via the COT type only — the first three characters `bao` mark the packet as an emergency alert. There is no separate emergency flag field.
+
+### 2.5 Callsign
+
+After the 13-character packed prefix and a `:` delimiter, the full TAK callsign follows. This is the entity's display name in TAK (may differ from the 9-character APRS object name, which is truncated).
+
+Allowed characters: letters, digits, space, hyphen, period. Callsign ends at the next `:` (if an ICON follows) or at the end of the APRS comment.
+
+### 2.6 Icon (Optional)
+
+Markers and shapes MAY carry an optional 4-character icon code after another `:` delimiter. Situational-awareness beacons (any `a-*` COT type) MUST NOT carry an icon — they render using only the team color and COT type symbology.
+
+Icon format:
+
+```
+<iconset-code><3-char-id>
+```
+
+- `<iconset-code>` is a single character (A-Z) identifying the iconset. 11 iconsets defined in v1.0 (see §3).
+- `<3-char-id>` is a 3-character base-36 alphanumeric ID (0-9, A-Z) within that iconset. Range `000` through `ZZZ` = 46,656 unique icons per iconset. IDs under 1,000 use pure decimal digits (e.g. `054`); IDs 1,000 and above use alphanumeric (e.g. `1AB`).
+
+Example: `D0QX` → the antelope icon from the Default ATAK iconset (the actual ID for antelope in the canonical dict).
+
+If an emitter has an iconsetpath not in the dictionary, it MAY emit the literal full path instead of a 4-char code. Receivers accept either format.
 
 ---
 
-## Human-Readable Hint Tail (v1.4)
+## 3. Iconset Dictionary
 
-Starting in v1.4, emitters MAY append a short human-readable tail to the APRS object comment, separated from the wire prefix by ` | ` (space-pipe-space). The tail is intended for APRS operators viewing a TAK entity on plain APRS clients (aprs.fi, YAAC, APRSIS32) — it tells them how to reach the entity by DM, or any other operator-configurable message.
+The canonical iconset dictionary — **every icon code decodable on v2.0 wire** — is published in this repository as a separate JSON file because its size (4,186 icons in v1.0) makes inlining impractical. The README here is the human-facing index; the JSON is the authoritative machine-readable source.
 
-### Wire Format
+**Canonical dictionary file:** [`iconset_dict_v1.json`](./iconset_dict_v1.json)
 
-```
-TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH] | <human-readable text>
-```
+Each entry has the form:
 
-### Typical Use — DM Hint on SA Objects
-
-A cot_radio gateway bridging a TAK team member onto APRS tells APRS operators how to message them back:
-
-```
-;DUSTY    *201430z3406.35N/11818.10W[TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I | DM:KN6ZPL-7 DUSTY
-```
-
-An APRS operator seeing DUSTY on aprs.fi reads the comment as "DM KN6ZPL-7 with 'DUSTY <message>' to reach this person." The TAK wire prefix before the ` | ` is ignored by the APRS operator; the hint after the ` | ` is ignored by cot_radio parsers.
-
-### Emitter Guidance
-
-- Applied to **SA / live-participant objects only** — not to placed markers, which are not chattable.
-- Kept short to fit inside the APRS practical comment cap (~67 bytes). The standard template `DM:{callsign} {target}` renders to ~17 chars for common callsigns.
-- Supports placeholder substitution: `{callsign}` = emitting gateway, `{target}` = TAK entity callsign.
-- Operator-configurable on cot_radio in the admin UI (IGate section → "SA Comment Hint"). Empty template disables the tail entirely.
-
-### Receiver Requirements
-
-Any v1.2+ parser implementation MUST strip the ` | ` tail BEFORE the colon split. Otherwise the hint corrupts the `cot_type` and/or `iconsetpath` fields (since the hint itself may contain colons like `DM:`). Pseudocode:
-
-```python
-if " | " in comment:
-    comment = comment[:comment.index(" | ")]
-parts = comment.split(":", 5)
-# ... proceed with standard positional parsing
+```json
+"D":{
+  "uuid":"34ae1613-9645-4222-a9d2-e5f243dea2865",
+  "name":"Default",
+  "icons":{
+    "000":{"path":"Animals/ant.png","desc":"ant"},
+    "001":{"path":"Animals/antelope.png","desc":"antelope"},
+    ...
+  }
+}
 ```
 
-Receivers MAY additionally parse and display the hint for debugging, but MUST NOT treat it as authoritative TAK data. The wire prefix is the only source of truth.
+The `path` field is the file path within the iconset (which combined with the iconset UUID forms the full iconsetpath stored in TAK COT XML). The `desc` field is the plain-English description, derived from the filename (underscores and hyphens → spaces). Any licensed amateur operator can download the JSON and decode any v2.0 icon code on the air.
 
-### Backwards Compatibility
+### 3.1 Iconset Letter-Code Assignments (v1.0)
 
-- v1.2 / v1.3 receivers that haven't implemented the ` | ` strip will silently misparse v1.4-emitted comments. Update parsers before running mixed networks.
-- v1.4 receivers correctly handle v1.2 / v1.3 comments without the tail (nothing to strip).
+| Code | Iconset name | UUID | Icon count |
+|---|---|---|---|
+| `A` | APRS (non-tak) | `APRS-NONTAK` | 188 |
+| `D` | Default (ATAK-CIV) | `34ae1613-9645-4222-a9d2-e5f243dea2865` | 821 |
+| `E` | FEMA Icons | `f8f7f666-8b28-4b57-9fbb-e48e61d33b79` | 42 |
+| `F` | FalconView | `67441c4a4924b8812e0f3e2191a2228a` | 489 |
+| `G` | Generic Icons | `ad78aafb-83a6-4c07-b2b9-a897a8b6a38f` | 657 |
+| `I` | Incident Management | `f3723f30315ea30f2f4b9101556772e2` | 12 |
+| `L` | Google | `f7f71666-8b28-4b57-9fbb-e38e61d33b79` | 96 |
+| `M` | OSM | `6d781afb-89a6-4c07-b2b9-a89748b6a38f` | 347 |
+| `O` | GeoOps | `83198b4872a8c34eb9c549da8a4de5a28f07821185b39a2277948f66c24ac17a` | 68 |
+| `P` | Public Safety Air | `ba0f5e196dfcee47a00ee3f4a494d64d` | 50 |
+| `R` | Responder Icons | `8a2105090b5f30fd2cefc64f3eae8ad3` | 1,416 |
+
+**Total v1.0:** 4,186 icons across 11 iconsets.
+
+### 3.2 ID Format
+
+Each icon ID is a **3-character base-36 alphanumeric string** (0-9, A-Z).
+
+- Range `000`-`ZZZ` = 46,656 unique IDs per iconset (more than enough; largest iconset in v1.0 is 1,416 icons).
+- IDs below 1,000 look like plain decimal digits (`001`, `042`, `999`).
+- IDs at or above 1,000 use alphanumeric base-36 (`1000` → `ZZZ`; `1000` decimal = `RS` base-36 padded to `0RS` = 3 chars).
+- Ordering within an iconset is alphabetical by (group, filename). Deterministic so IDs never shift as the dictionary is extended.
+
+### 3.3 Reserved Letters
+
+- **Codes in use (v1.0):** `A`, `D`, `E`, `F`, `G`, `I`, `L`, `M`, `O`, `P`, `R`.
+- **Codes available for future canonical iconsets:** `B`, `C`, `H`, `J`, `K`, `N`, `Q`, `S`, `T`, `U`, `V`, `W`.
+- **Codes reserved for operator-custom iconsets:** `X`, `Y`, `Z`. Operators using these codes on amateur frequencies MUST publish their custom `iconset_dict.user.json` additions (filename + English description) to every operator on their network, preserving Part 97 transparency.
+
+### 3.4 Versioning Rules
+
+- **Adding a new icon to an existing iconset** → bump minor version (`1.0` → `1.1`). Existing IDs never change.
+- **Adding a new iconset code** → bump minor version. Existing codes never change.
+- **Renumbering or removing an icon ID** → major-version bump (`1.x` → `2.0`). Invalidates archived wire traffic; only done in emergencies.
+
+The version number in force at time of transmission is published at the top of `iconset_dict_v1.json` (currently **v1.0**, dated 2026-04-24).
 
 ---
 
-## Object Name Encoding
+## 4. Chat Format (Messages and Bulletins)
 
-The APRS object name is limited to exactly 9 characters (space-padded). TAK callsigns are encoded as follows:
+Chat packets use the standard APRS message format:
 
-1. Strip all period (`.`) characters from the callsign
-2. Truncate to 9 characters
-3. Right-pad with spaces to exactly 9 characters
+```
+ORIGINATOR>APRS,PATH::ADDRESSEE :TAK:<H><UUUU>:<SENDER>:<body>
+```
 
-The full unmodified callsign is preserved in the TAK comment field (field 2).
+- **ORIGINATOR** — gateway's ham callsign + SSID.
+- **ADDRESSEE** — 9-character space-padded recipient. `BLN1` = bulletin (broadcast to all); a specific callsign = direct message.
+- **TAK:** — literal prefix marking this as a v2.0 chat packet.
+- **`<H>`** — hop count, 1 hex character (`0`-`F`). The gateway that first emits the packet sets hop=`0`. Each gateway that re-relays increments hop by 1. A gateway at hop ≥ `bridge_max_hops` (default 2) delivers locally only and does not re-transmit.
+- **`<UUUU>`** — UUID, 4 hex characters. Random per-message identifier for loop prevention.
+- **`<SENDER>`** — the original sender's display name (TAK callsign or mesh node short-name). May contain letters, digits, space, hyphen, period — ends at the next `:`.
+- **`<body>`** — the chat message text.
 
-### Examples
+### 4.1 Addressee Routing (How TAK Chatrooms Map to APRS Addressees)
 
-| TAK Callsign | Object Name | Comment Field |
-|--------------|-------------|---------------|
-| HAWK | `HAWK     ` | `TAK:HAWK:Cyan:a-f-G-U-C` |
-| FALCON | `FALCON   ` | `TAK:FALCON:Cyan:a-f-G-U-C` |
-| ANTELOPE 1 | `ANTELOPE ` | `TAK:ANTELOPE 1:White:a-f-G-U-C` |
-| M.5.679477 | `M5679477 ` | `TAK:M.5.679477::a-f-G` |
+| TAK chatroom | APRS addressee | Notes |
+|---|---|---|
+| `All Chat Rooms` | `BLN1` | Bulletin broadcast. Hop=0, fresh UUID. |
+| Valid amateur callsign (e.g. `KN6YYY-9`) | The callsign, 9-char padded | Direct message to an APRS station. |
+| TAK tactical callsign (e.g. `HAWK`, `FALCON`) | The callsign, 9-char padded | Direct message cross-TAK; receiving gateway rebuilds as a TAK GeoChat. |
+| Mesh node short name (recipient UID begins `MESH-`) | (not transmitted) | No APRS equivalent — dropped at emit. |
+
+### 4.2 Multi-Part Messages
+
+Chat bodies longer than ~55 characters are split across multiple APRS messages. Each segment's body begins with a marker `(n/N) ` where `n` is the 1-based segment number and `N` is the total segment count. Both segments share the same UUID so receivers can reassemble:
+
+```
+KN6ZPL-7>APRS::BLN1     :TAK:0a1b2:HAWK:(1/2) first part of a long message
+KN6ZPL-7>APRS::BLN1     :TAK:0a1b2:HAWK:(2/2) and here is the second part
+```
+
+Maximum 5 segments per message. Bodies that would exceed 5 segments are ellipsis-truncated at the emitter.
+
+### 4.3 Loop Prevention
+
+Each gateway keeps an in-memory cache of recently-seen UUIDs (default TTL 30 seconds, maximum 1000 entries). If a UUID has been seen within the window, the duplicate is dropped. Combined with the hop-count limit, this prevents relay loops in multi-gateway networks.
 
 ---
 
-## APRS Message Encoding
+## 5. Configuration Changes for v2.0
 
-TAK chat messages are encoded as standard APRS messages with a TAK sender prefix in the body. Two prefix formats coexist:
+Gateways running cot_radio update their `settings.json`:
 
-- **v1.2 object/DM prefix** — `TAK:GATEWAY:SENDER:body` — used for DMs cross-TAK where the receiver must rebuild a specific senderCallsign.
-- **v1.3 relay prefix** — `TAK:HHUUUUUU:SENDER:body` — used for bidirectional group-chat relay (TAK All Chat ↔ APRS BLN1). The second field is a 7-char hex token (1 hop digit + 6 hex UUID) for loop prevention and multi-gateway coordination.
-
-Receivers distinguish the two by the shape of the second field: **exactly 7 hex chars = v1.3 relay**; anything else = v1.2 (or v1.0 plain APRS).
-
-### All Chat → APRS Bulletin (v1.3 relay)
-```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::BLN1     :TAK:0a1b2c3:HAWK:hello world
-```
-
-### Direct Message → APRS DM (v1.2)
-```
-KN6ZPL-7>APRS,WIDE1-1,WIDE2-1::KN6YYY   :TAK:BASE:HAWK:reply text{42
-```
-
-| Field | Description |
-|-------|-------------|
-| `::` | APRS message data type (double colon) |
-| Addressee | 9-char space-padded recipient callsign. `BLN1` = bulletin (broadcast). |
-| Message | `TAK:GATEWAY:SENDER:body` — gateway tactical + original sender + body |
-| `{ID` | Optional message ID for ack/rej (e.g., `{42`) |
-
-### TAK Body Prefix
-
-The message body begins with `TAK:GATEWAY:SENDER:` where:
-
-- **GATEWAY** — tactical callsign of the cot_radio gateway that emitted this packet (`identity.tactical_callsign`). Lets receivers detect own emissions and route attribution correctly.
-- **SENDER** — original TAK callsign (or mesh node short name) of whoever sent the chat in the originating TAK environment.
-
-Receiving cot_radio gateways parse this prefix and reconstruct the GeoChat COT with `senderCallsign=SENDER`, so the message displays as coming from the original sender — not from the gateway's ham callsign.
-
-#### Parsing Rules
-
-1. Strip the addressee header (`::ADDRESSEE:`) per standard APRS.
-2. If the body starts with `TAK:`, split on `:` (max 4 parts).
-3. Field 2 is the gateway tactical callsign.
-4. Field 3 is the original sender callsign — use as `senderCallsign` in the GeoChat COT.
-5. Field 4 is the message body — put in `<remarks>`.
-6. If the body does not start with `TAK:`, treat as a normal APRS message and use the gateway callsign as the sender (legacy / non-cot_radio APRS clients).
-
-#### Example Parsing
-
-```
-TAK:BASE:HAWK:Hello team
-  → gateway        = "BASE"
-  → senderCallsign = "HAWK"
-  → body           = "Hello team"
-
-TAK:RELAY-7:A#1:reply from mesh
-  → gateway        = "RELAY-7"
-  → senderCallsign = "A#1"
-  → body           = "reply from mesh"
-
-Plain APRS message from a non-cot_radio client → senderCallsign = origin gateway
-```
-
-### Routing Rules (TAK → APRS)
-
-The cot_radio implementation maps the TAK GeoChat `chatroom` field to the APRS addressee as follows:
-
-| TAK chatroom | APRS addressee | Prefix | Notes |
-|--------------|----------------|--------|-------|
-| `All Chat Rooms` | `BLN1` | v1.3 relay | Bulletin broadcast; hop=0, fresh UUID |
-| Valid amateur callsign (e.g. `KN6YYY-9`) | recipient callsign | v1.2 object | DM to APRS station |
-| Tactical TAK callsign (e.g. `HAWK`, `FALCON`) | recipient callsign | v1.2 object | DM cross-TAK; receiving cot_radio rebuilds GeoChat to that callsign |
-| Mesh node short name (recipient UID begins with `MESH-`) | (dropped) | — | No APRS equivalent — not transmitted |
+- `identity.tactical_callsign` (string) → **`identity.station_number`** (integer, 0-99)
+- `gating.uuid_cache_ttl_s` default 300 → **30**
+- `igate.sa_comment_hint` (string) → removed / ignored (no hint tail in v2.0)
 
 ---
 
-## v1.3 Relay Prefix — Group-Chat Bidirectional Relay
+## 6. Echo Suppression
 
-The v1.3 relay prefix supports **multi-gateway group chat** (TAK All Chat ↔ APRS BLN1) with loop prevention, hop limits, and multi-part reassembly for bodies longer than the APRS 67-char message cap.
+A cot_radio instance MUST drop packets that are echoes of its own transmissions:
 
-### Prefix Format
-
-```
-TAK:HHUUUUUU:SENDER:BODY
-```
-
-| Segment | Length | Format | Purpose |
-|---------|--------|--------|---------|
-| `TAK:` | 4 | Literal | Identifies a cot_radio extension |
-| `HH` | 1 hex char | `0`–`9`, `a`–`f` | Hop count (0–15). Emitter sets 0; each re-relay increments by 1. Dropped once count ≥ `bridge_max_hops`. |
-| `UUUUUU` | 6 hex chars | `0`–`9`, `a`–`f` | UUID6 — random per-message identifier for cross-gateway loop prevention |
-| `:` | 1 | Literal | Delimiter |
-| `SENDER` | 1+ | any non-`:` | Original TAK callsign (or mesh short-name) of whoever said it in TAK |
-| `:` | 1 | Literal | Delimiter |
-| `BODY` | 0+ | any | The message. May start with a multi-part marker (see below). |
-
-**Identification regex:** `^TAK:([0-9a-fA-F]{7}):([^:]+):(.*)` with DOTALL. The 7-hex-char second field is the distinguishing feature — parsers check this shape first; if it doesn't match, fall back to v1.2 parsing (`TAK:GATEWAY:SENDER:body` with arbitrary GATEWAY).
-
-### Multi-Part Marker
-
-Bodies longer than 60 characters are split across multiple APRS messages. Each segment's body is prefixed with a one-based count marker:
-
-```
-(n/N) segment text
-```
-
-Where `n` is the 1-based segment number and `N` is the total segment count. Both segments share the same UUID so receivers can reassemble:
-
-```
-KN6ZPL-7>APRS::BLN1     :TAK:0a1b2c3:HAWK:(1/2) first part of a long message that doesn't fit
-KN6ZPL-7>APRS::BLN1     :TAK:0a1b2c3:HAWK:(2/2) and here is the second part
-```
-
-**Segment limit:** 60 chars body + 15 chars prefix ≈ 67 total. Max 5 segments per message (longer bodies are ellipsis-truncated at the emitter).
-
-### Receiver Behaviour
-
-1. **UUID de-dup.** Maintain an LRU cache `{uuid → first_seen_ts}`, TTL = `uuid_cache_ttl_s` (default 300). If a UUID has been seen within TTL, drop the duplicate.
-2. **Hop-count drop.** If `hop ≥ bridge_max_hops` (default 2), do not re-relay — deliver locally only.
-3. **Reassembly.** Group segments by UUID; deliver to TAK when all parts arrive or after `reassembly_timeout_s` (default 30), inserting `[part N missing]` for gaps.
-4. **Re-relay.** If the gateway has `bridge_tak_broadcast_to_aprs=true` and `hop < bridge_max_hops`, retransmit the segment(s) to APRS with hop+1 and the **same UUID**. The UUID is pre-observed in the local cache before emission so the gateway does not re-relay its own output.
-5. **Origin display.** Delivered group-chat bodies are prefixed with `<SENDER> | APRS <class>: ` in the TAK `<remarks>` (where class ∈ `Bulletin`, `NWS`, `Announcement`, `APRS`). Operators can disable via `prefix_group_origin=false`.
-
-### Emitter Behaviour (TAK All Chat → APRS)
-
-When a TAK chat packet arrives with `chatroom="All Chat Rooms"`:
-
-1. Generate a fresh `uuid6` (6 random hex chars) and set hop `0`.
-2. Split the body into 60-char segments on space boundaries where possible; ellipsis-truncate to 5 segments max.
-3. Prepend `(n/N) ` to each segment.
-4. For each segment, emit `TAK:0UUUUUU:SENDER:(n/N) body` to APRS addressee `BLN1`.
-5. Pre-observe the UUID in the local cache so the re-relay path does not re-emit own traffic.
-
-### Loop Prevention Guarantees
-
-- **Single gateway, echoed via digipeater:** UUID cache catches it on the first receive.
-- **Two gateways in mutual view:** Gateway A emits (hop=0). Gateway B receives, delivers, re-relays (hop=1). Gateway A receives B's packet, UUID matches cache — dropped. Gateway B receives its own packet, UUID matches — dropped.
-- **Three gateways chained (A→B→C):** A emits hop=0; B re-emits hop=1; C re-emits hop=2. If `bridge_max_hops=2`, C delivers but does not re-relay.
-
-### Default Behaviour for APRS-to-APRS Chatter
-
-v1.3 relay is **one-way by default** for plain APRS-to-APRS DMs: a DM between two amateur callsigns (neither of which has a live TAK equivalent) is **not** bridged to TAK unless the operator sets `bridge_aprs_chatter=true`. This keeps unrelated third-party ham conversations off TAK screens.
+1. **Own station number** — if the packed prefix's `NN` matches the gateway's own `station_number`, drop the packet.
+2. **Own chat callsign** — if a chat packet's ORIGINATOR field matches the gateway's own ham callsign-SSID, drop.
+3. **Peer echo** — if an inbound object's CALLSIGN is already observed on the gateway's local TAK multicast (via a short-TTL contact registry), drop. Prevents duplicate markers when two gateways share a LAN or a mesh bridge is in use.
 
 ---
 
-## Echo Suppression
+## 7. Part 97 Compliance
 
-### Own-Object Detection
+Amateur radio operators using this protocol on FCC-licensed frequencies (USA) are bound by 47 CFR Part 97, specifically §97.113(a)(4) which prohibits "messages in codes or ciphers intended to obscure the meaning thereof."
 
-When a cot_radio instance receives an APRS object with a `TAK:` comment containing its own callsign+SSID, it drops the packet as an echo of its own transmission.
+v2.0 uses compressed codes (single letters for team color and role, 6-character COT types, 4-character icon references). These codes are **compressed** but not **obscured**:
 
-### Multi-Gateway Coordination
+- Every letter and every code is defined in this document, in plain English.
+- This document is publicly published at <https://github.com/adamstern2000/cot_radio_aprs>.
+- Any licensed operator can download this document and decode any v2.0 packet heard on the air.
+- The iconset dictionary (§3) is complete — every icon ID has a canonical path and an English description published here.
 
-Each cot_radio instance MUST use a unique SSID (0-15) within its coverage area. The SSID is used for echo suppression — if two gateways share the same callsign+SSID, they will suppress each other's objects.
+Operator obligations when running v2.0 on amateur frequencies:
 
----
+1. **Transmit your FCC callsign** in the AX.25 header of every frame. (Already required by APRS; v2.0 does not change this.)
+2. **Use a station number tied to your licensed station** — operator discipline; two stations on one network each pick a unique `station_number` and document which physical station uses which number.
+3. **Do not modify the v2.0 tables locally** in a way that differs from the canonical tables in this document. Local modification would cross from "compressed" into "obscured" and is not Part 97 compliant.
+4. **If you use a custom iconset** (codes `X`, `Y`, `Z`), publish your custom iconset additions (filename + English description) to every operator on your network. The transparency requirement applies to custom content just as it does to canonical content.
 
-## COT Type Reference
-
-The COT_TYPE field uses MIL-STD-2525C type codes:
-
-| COT Type | Meaning |
-|----------|---------|
-| `a-f-G-U-C` | Friendly ground unit, combat |
-| `a-f-G-U-C-I` | Friendly ground unit, infantry |
-| `a-h-G` | Hostile ground |
-| `a-n-G` | Neutral ground |
-| `a-u-G` | Unknown ground |
-| `a-f-A-M-F` | Friendly air, military, fixed-wing |
-| `a-f-A-M-H` | Friendly air, military, rotary-wing |
-
-The full COT type determines both the affiliation (friendly/hostile/neutral/unknown) and the MIL-STD-2525 symbology on TAK displays.
+v2.0 is in the same Part 97 category as existing APRS compression methods (Mic-E, Base91, compressed position) — efficient on-the-wire encoding that is publicly documented.
 
 ---
 
-## Compatibility
+## 8. Version History
 
-- **Standard APRS clients** (YAAC, APRSIS32, Xastir, aprs.fi): display TAK objects as normal APRS objects with the selected symbol. The TAK comment field appears as regular comment text.
-- **cot_radio instances**: parse the TAK comment field to reconstruct full COT entities with correct callsign, team, affiliation, and custom icon.
-- **ATAK/WinTAK**: receive TAK entities via cot_radio's multicast COT emission, not directly from APRS.
-
----
-
-## Version History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2026-04-17 | Initial specification |
-| 1.1 | 2026-04-17 | Chat: added `TAK:SENDER:` body prefix so original TAK/mesh sender is preserved across the bridge. Added explicit routing rules table for chatroom → APRS addressee mapping. Mesh-targeted DMs (recipient UID begins `MESH-`) are dropped. |
-| 1.2 | 2026-04-17 | Added `GATEWAY` field as the second element of every TAK: prefix on both objects and chat. GATEWAY is the emitting gateway's `identity.tactical_callsign` — must be unique across the network. Lets receivers detect own emissions, attribute traffic, and de-duplicate. Object format: `TAK:GATEWAY:CALLSIGN:TEAM:COT_TYPE[:ICONSETPATH]`. Chat format: `TAK:GATEWAY:SENDER:body`. Backwards compatible: receivers should accept v1.1 format (no GATEWAY) and v1.0 format (no TAK: prefix). |
-| 1.3 | 2026-04-20 | Added **v1.3 relay prefix** for bidirectional group chat (TAK All Chat ↔ APRS BLN1). Format `TAK:HHUUUUUU:SENDER:body` where `HH` is a 1-char hop count and `UUUUUU` is a 6-char UUID6. Adds multi-part marker `(n/N)` for bodies > 60 chars, hop-count limit (default 2), UUID cache for cross-gateway loop prevention (default 300 s TTL), reassembly timeout (default 30 s), and origin-labeled body prefix `<SENDER> | APRS <class>: ` on delivery. v1.2 object/DM format is unchanged and coexists with v1.3 on the wire — receivers distinguish by the shape of field 2 (exactly 7 hex chars = v1.3 relay). APRS-to-APRS DMs between third-party hams are not bridged to TAK unless `bridge_aprs_chatter=true`. |
-| 1.4 | 2026-04-20 | Added **human-readable hint tail** on object comments — anything after ` | ` (space-pipe-space) is free-form text for APRS operators viewing the entity on plain APRS clients. Typical use: `TAK:BASE:DUSTY:Cyan:a-f-G-U-C-I \| DM:KN6ZPL-7 DUSTY` tells an APRS op how to DM the TAK participant via the gateway. Parsers MUST strip the ` \| ` tail BEFORE the colon split (tail may itself contain colons like `DM:`). Emitters apply the tail to SA / live-participant objects only, not placed markers. Operator-configurable on cot_radio (admin UI → IGate → "SA Comment Hint"). Backwards compatible: v1.4 receivers correctly parse v1.2/v1.3 comments with no tail; older parsers silently misparse v1.4-emitted comments until updated. |
+| Version | Date | Summary |
+|---|---|---|
+| 1.0 | 2026-04-17 | Initial spec. Human-readable fields, colons between every field. |
+| 1.1 | 2026-04-17 | Added `TAK:SENDER:body` chat prefix so original sender preserved across bridge. |
+| 1.2 | 2026-04-17 | Added GATEWAY field (tactical callsign) to every prefix. |
+| 1.3 | 2026-04-20 | Bidirectional group-chat relay (TAK All Chat ↔ APRS BLN1) with UUID-based loop prevention. |
+| 1.4 | 2026-04-20 | Human-readable hint tail appended to object comments for plain-APRS operator visibility. |
+| **2.0** | **2026-04-24** | **Ground-up rewrite for airtime efficiency. Packed fixed-width prefix, single-letter codes for team/role, 6-character COT type, 4-character iconset IDs via published dictionary, 4-hex UUID with 30s cache TTL. No back-compat with v1.x. Fully self-contained — every code defined in this document for Part 97 transparency.** |
