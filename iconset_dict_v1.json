@@ -1,0 +1,95 @@
+{
+  "_readme": "cot_radio_aprs v2.0 canonical iconset dictionary. Published here for Part 97 transparency — any licensed amateur operator can download this file and decode the 4-char icon codes used in v2.0 packets on ham radio frequencies. Additive-only within a major version; new icons get new IDs, existing IDs never change. Removing or renumbering requires a major-version bump and invalidates archived traffic.",
+  "version": "1.0",
+  "date": "2026-04-24",
+  "iconsets": {
+    "D": {
+      "uuid": "34ae1613-9645-4222-a9d2-e5f243dea2865",
+      "name": "Default ATAK",
+      "source": "AndroidTacticalAssaultKit-CIV (https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV) — the canonical ATAK client iconset",
+      "icons": {
+        "001": "Animals/antelope.png",
+        "002": "Animals/bear.png",
+        "003": "Animals/cat.png",
+        "004": "Animals/cow.png",
+        "005": "Animals/dog.png",
+        "006": "Animals/eagle.png",
+        "007": "Animals/goat.png",
+        "008": "Animals/horse.png",
+        "009": "Animals/owl.png",
+        "010": "Animals/rabbit.png",
+
+        "050": "Transportation/airplane.png",
+        "051": "Transportation/bicycle.png",
+        "052": "Transportation/boat.png",
+        "053": "Transportation/bus.png",
+        "054": "Transportation/car.png",
+        "055": "Transportation/helicopter.png",
+        "056": "Transportation/motorcycle.png",
+        "057": "Transportation/tank.png",
+        "058": "Transportation/train.png",
+        "059": "Transportation/truck.png",
+        "060": "Transportation/van.png",
+
+        "100": "People/person.png",
+        "101": "People/soldier.png",
+        "102": "People/team_lead.png",
+        "103": "People/medic.png",
+        "104": "People/sniper.png",
+        "105": "People/k9.png",
+        "106": "People/officer.png",
+        "107": "People/casualty.png",
+
+        "150": "Weapons/rifle.png",
+        "151": "Weapons/mortar.png",
+        "152": "Weapons/machine_gun.png",
+        "153": "Weapons/artillery.png",
+
+        "200": "Structures/building.png",
+        "201": "Structures/bunker.png",
+        "202": "Structures/bridge.png",
+        "203": "Structures/tower.png",
+        "204": "Structures/tent.png",
+        "205": "Structures/gate.png",
+
+        "250": "Hazards/fire.png",
+        "251": "Hazards/explosion.png",
+        "252": "Hazards/smoke.png",
+        "253": "Hazards/flood.png",
+        "254": "Hazards/biohazard.png",
+        "255": "Hazards/radiation.png",
+        "256": "Hazards/chemical.png"
+      }
+    },
+    "F": {
+      "uuid": "f3723f30315ea30f2f4b9101556772e2",
+      "name": "FEMA Incident Management",
+      "source": "FEMA-published incident-command iconset, widely distributed in the emergency-management community and bundled with many TAK deployments",
+      "icons": {
+        "001": "Incident Management/command post.png",
+        "002": "Incident Management/staging area.png",
+        "003": "Incident Management/casualty collection point.png",
+        "004": "Incident Management/medical triage area.png",
+        "005": "Incident Management/decon area.png",
+        "006": "Incident Management/emergency operations center.png",
+        "007": "Incident Management/water point.png",
+        "008": "Incident Management/helicopter landing area.png",
+        "009": "Incident Management/aircraft crash.png",
+        "010": "Incident Management/fire hazard.png",
+        "011": "Incident Management/road blocked.png",
+        "012": "Incident Management/incident.png",
+
+        "050": "Human Caused Hazards/Hazard--Structural-Collapse.png",
+        "051": "Human Caused Hazards/Hazard--Radiological-General.png",
+        "052": "Human Caused Hazards/Hazard--Chemical-Spill.png",
+        "053": "Human Caused Hazards/Hazard--Biological-General.png",
+        "054": "Human Caused Hazards/Hazard--Explosion.png"
+      }
+    }
+  },
+  "_notes": {
+    "id_ranges": "IDs are loosely themed by hundred-blocks for human mnemonics: 000-049 Animals, 050-099 Transportation, 100-149 People, 150-199 Weapons, 200-249 Structures, 250-299 Hazards (in Default ATAK iconset D). Themes are advisory, not normative — receivers MUST treat IDs as opaque lookups.",
+    "populating": "This initial v1.0 is a seed. Additional icons get appended as operators identify need; each addition bumps the version minor digit.",
+    "custom_iconsets": "Operator-custom iconsets use codes X, Y, Z via a separate iconset_dict.user.json maintained out-of-band and synced across the operator's network. Publishing that user-level dict is required for Part 97 compliance when used on amateur frequencies."
+  }
+}

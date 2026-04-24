@@ -29,6 +29,26 @@ v1.x senders and v2.0 senders cannot share an APRS network — receivers must ma
 
 ---
 
+## Part 97 (Amateur Radio) Compliance
+
+The United States FCC Part 97 rules for amateur radio prohibit "codes and ciphers intended to obscure the meaning" of a transmission (§97.113(a)(4)). v2.0 uses compressed codes (letters for team/role, 6-char COT types, 4-char iconset IDs) — but **compressed is not obscured**: the codes are 1-to-1 mapped to their canonical meanings via tables published in this repository.
+
+Any licensed operator can:
+
+1. Download this repository.
+2. Read the plaintext mapping tables (team colors, roles, COT types, iconsets).
+3. Decode any v2.0 packet heard on the air.
+
+This places v2.0 in the same legal category as APRS compression (Mic-E, Base91, APRS-101 compressed position) — efficient on-the-wire encoding that is publicly documented. Operators using v2.0 on amateur frequencies MUST:
+
+- Transmit their FCC callsign in the AX.25 header of every frame (already true for APRS).
+- Use a `station_number` tied to their licensed station (operator discipline).
+- Not modify the v2.0 tables locally in a way that differs from the canonical published version (that would cross into obscuring meaning).
+
+Operator-custom iconsets (codes `X`, `Y`, `Z`) are permitted because the operator's custom `iconset_dict.user.json` MUST be published and shared with anyone on the network — the transparency requirement stands.
+
+---
+
 ## Design Principles
 
 1. **Packed fixed-width prefix.** Known-width fields run together with no internal delimiters, parsed positionally.
@@ -66,68 +86,91 @@ ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW<s><c>TAK<NN><t><r><TTT
 
 #### Team Color Table (14 entries + future)
 
-| Letter | Color |
-|---|---|
-| A | White |
-| B | Yellow |
-| C | Orange |
-| D | Magenta |
-| E | Red |
-| F | Maroon |
-| G | Purple |
-| H | Dark Blue |
-| I | Blue |
-| J | Cyan |
-| K | Teal |
-| L | Green |
-| M | Dark Green |
-| N | Brown |
+The 14 standard TAK team colors as defined in the ATAK-CIV source. Each letter maps to a color name + the canonical ARGB hex used on TAK clients.
 
-The alphabetical order maps to the standard TAK team color palette. If TAK adds more colors, appending to the table extends the codespace (O, P, …, Z). Receivers that see an unknown letter fall back to `Green` (cot_radio default).
+| Letter | Color | Hex (RGB) | ARGB (signed int — TAK wire) |
+|---|---|---|---|
+| A | White       | `#FFFFFF` | -1         |
+| B | Yellow      | `#FFFF00` | -256       |
+| C | Orange      | `#FF8C00` | -7636      |
+| D | Magenta     | `#FF00FF` | -65281     |
+| E | Red         | `#FF0000` | -65536     |
+| F | Maroon      | `#7F0000` | -8454144   |
+| G | Purple      | `#800080` | -8388480   |
+| H | Dark Blue   | `#000080` | -16777088  |
+| I | Blue        | `#0000FF` | -16776961  |
+| J | Cyan        | `#00FFFF` | -16711681  |
+| K | Teal        | `#008080` | -16744320  |
+| L | Green       | `#00FF00` | -16711936  |
+| M | Dark Green  | `#008000` | -16744448  |
+| N | Brown       | `#A52A2A` | -5952982   |
+
+**Source:** Team color names are defined in the ATAK-CIV public repo at <https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV> (class `com.atakmap.android.user.PlacePointTool` and `TeamColor` enum).
+
+Alphabetical ordering is arbitrary but stable; future TAK team colors append new letters (`O`, `P`, …, `Z`). Receivers that see an unknown letter SHOULD fall back to `Green` (the cot_radio default).
 
 #### Role Table
 
-| Letter | Role |
-|---|---|
-| M | Team Member (default) |
-| L | Team Lead |
-| H | HQ |
-| R | RTO |
-| K | K9 |
-| F | Forward Observer |
-| S | Sniper |
-| D | Medic |
+The 8 standard TAK roles as defined in the ATAK-CIV source:
 
-Receivers default to `M` when the letter is empty or unknown.
+| Letter | Role | Description |
+|---|---|---|
+| M | Team Member | Default — regular team participant |
+| L | Team Lead | Unit leader |
+| H | HQ | Headquarters / command element |
+| R | RTO | Radio Telephone Operator |
+| K | K9 | Dog handler |
+| F | Forward Observer | Observation / reconnaissance |
+| S | Sniper | Designated marksman |
+| D | Medic | Combat medic / EMT |
+
+**Source:** Roles are defined in the ATAK-CIV public repo at <https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV>. The `role` attribute lives inside the CoT `<__group>` detail element alongside team color.
+
+Receivers MUST default to `M` (Team Member) when the role letter is empty or unknown. Roles beyond the 8 defined here use the letter `U` (Unknown) and render as Team Member on strict-parsing clients.
 
 #### COT Type Encoding
 
-The COT type field is exactly 6 chars.
+The COT type field is exactly 6 chars on the wire.
+
+Encoding rules:
 
 1. Strip all `-` characters from the canonical TAK type string.
-2. Lowercase.
+2. Lowercase the result.
 3. Right-pad with `_` to exactly 6 chars.
 4. Truncate to 6 chars if longer — receiver will render a less-specific symbol but still decode affiliation.
 
-Examples:
+**The canonical TAK type strings themselves derive from MIL-STD-2525C** (NATO Joint Military Symbology — the US DoD standard for battlefield graphics). The TAK dot-separated form (`a-f-G-U-C`) maps to the 15-character SIDC (Symbol Identification Code) at positions 1 (coding scheme), 2 (affiliation), 3 (battle dimension), and 4+ (function ID).
 
-| Canonical | 6-char encoding |
-|---|---|
-| `a-f-G-U-C` (friendly ground unit combat / infantry) | `afguc_` |
-| `a-f-G-U-C-I` (infantry specific) | `afguci` |
-| `a-f-G-U-C-I-M` (motorized infantry) | `afguci` (truncated, `M` lost) |
-| `a-f-G-E-V-C` (friendly civilian vehicle) | `afgevc` |
-| `a-h-G` (hostile ground) | `ahg___` |
-| `a-n-G` (neutral ground) | `ang___` |
-| `a-u-G` (unknown ground) | `aug___` |
-| `a-f-A-M-F` (friendly air fixed-wing) | `afamf_` |
-| `a-f-A-M-H` (helo) | `afamh_` |
-| `b-a-o-tbl` (emergency alert — 911 Alert) | `baotbl` |
-| `b-m-p-s-m` (marker — spot) | `bmpsm_` |
-| `u-d-f` (polygon / line) | `udf___` |
-| `u-d-r` (rectangle) | `udr___` |
+**Public references:**
 
-Emergency is encoded via the COT type only (`baotbl`). There is no separate emergency flag.
+- MIL-STD-2525C spec (DoD, freely downloadable): <https://www.jcs.mil/Portals/36/Documents/Doctrine/Other_Pubs/ms_2525c.pdf>
+- NATO Joint Military Symbology — public overview: <https://en.wikipedia.org/wiki/NATO_Joint_Military_Symbology>
+- TAK public CoT type catalog (canonical enumeration used by ATAK / WinTAK): <https://github.com/TAK-Product-Center/Server/tree/main/src/takserver-core/coreServer/conf/types>
+- TAK Technical Overview (public PDF): <https://www.tak.gov>
+
+Examples of the v2.0 6-char encoding:
+
+| Canonical TAK type | MIL-STD-2525 description | 6-char encoding |
+|---|---|---|
+| `a-f-G-U-C` | friendly ground unit combat (infantry) | `afguc_` |
+| `a-f-G-U-C-I` | friendly ground unit infantry | `afguci` |
+| `a-f-G-U-C-I-M` | motorized infantry | `afguci` *(truncated, `M` lost)* |
+| `a-f-G-E-V-C` | friendly civilian vehicle | `afgevc` |
+| `a-h-G` | hostile ground (generic) | `ahg___` |
+| `a-n-G` | neutral ground | `ang___` |
+| `a-u-G` | unknown ground | `aug___` |
+| `a-f-A-M-F` | friendly air fixed-wing military | `afamf_` |
+| `a-f-A-M-H` | friendly air rotary-wing (helo) | `afamh_` |
+| `a-f-S-C-L` | friendly surface combat large | `afscl_` |
+| `b-a-o-tbl` | emergency alert — 911 Alert | `baotbl` |
+| `b-a-o-pan` | emergency alert — ring the bell | `baopan` |
+| `b-m-p-s-m` | marker — spot | `bmpsm_` |
+| `u-d-f` | polygon / freehand line | `udf___` |
+| `u-d-r` | rectangle | `udr___` |
+
+Emergency is encoded via the COT type only (`baotbl`, `baopan`). There is no separate emergency flag.
+
+**Decoding note:** The receiver reverses the process — strip trailing `_`, insert `-` between transitions (based on the canonical TAK hierarchy: `a-{affiliation}-{dim}-{function...}`). A 6-char encoding loses the dash positions, so receivers rebuild the canonical form from a lookup table. Unknown codes render as the base affiliation symbol (first 3 chars) with a warning.
 
 #### Iconset Encoding
 
@@ -137,26 +180,34 @@ Markers and shapes may carry a 4-char icon code:
 <iconset-code><3-digit-id>
 ```
 
-- `<iconset-code>` is a single character identifying the iconset (A-Z, 0-9). The canonical mapping ships in `iconset_dict.json` with cot_radio and is versioned.
-  - `D` = Default ATAK iconset (UUID `34ae1613-9645-4222-a9d2-e5f243dea2865`)
-  - `F` = FEMA / Incident Management iconset (UUID `f3723f30315ea30f2f4b9101556772e2`)
-  - Future canonical iconsets append new letters.
-  - `X`, `Y`, `Z` reserved for operator-custom iconsets via `iconset_dict.user.json`.
+- `<iconset-code>` is a single character identifying the iconset (A-Z, 0-9).
+- `<3-digit-id>` is a zero-padded numeric ID for an icon within that iconset, `000`-`999`.
 
-- `<3-digit-id>` is a zero-padded numeric ID for an icon within that iconset, `000`-`999`. The ID → full filename path is fixed by `iconset_dict.json` version.
+The ID → full iconset-path mapping is defined by the **canonical iconset dictionary published in this repo**:
+
+**[`iconset_dict_v1.json`](./iconset_dict_v1.json)** ← authoritative reference
+
+Ships with cot_radio; also lives here on GitHub for Part 97 transparency. Any licensed operator can read the dictionary and decode what's on the air.
+
+Canonical iconset codes (v1.0 initial):
+
+- `D` = Default ATAK iconset (UUID `34ae1613-9645-4222-a9d2-e5f243dea2865`) — ships with ATAK-CIV
+- `F` = FEMA / Incident Management iconset (UUID `f3723f30315ea30f2f4b9101556772e2`) — public FEMA-published set
+- Codes `A`-`W` (excluding `D`, `F` and others reserved canonical) available for future canonical additions
+- Codes `X`, `Y`, `Z` reserved for operator-custom iconsets via an operator-maintained `iconset_dict.user.json` (MUST be synced across all cot_radio gateways in the network)
 
 Examples:
 
-| Wire | Full iconsetpath |
+| Wire | Canonical iconsetpath |
 |---|---|
-| `D042` | `34ae1613.../Animals/antelope.png` |
-| `D015` | `34ae1613.../Transportation/car.png` |
-| `F007` | `f3723f30.../Incident/command_post.png` |
+| `D042` | `34ae1613-9645-4222-a9d2-e5f243dea2865/Animals/antelope.png` |
+| `D015` | `34ae1613-9645-4222-a9d2-e5f243dea2865/Transportation/car.png` |
+| `F007` | `f3723f30315ea30f2f4b9101556772e2/Incident Management/command_post.png` |
 
 **Fallback chain at emit:**
 
-1. Try exact-match lookup of `(iconset UUID, filename)` in `iconset_dict.json`. On hit → emit `<code><id>`.
-2. Miss → emit the literal full path (breaking the 4-char budget). Receiver still stores it.
+1. Try exact-match lookup of `(iconset UUID, filename)` in the canonical dict. On hit → emit `<code><id>`.
+2. Miss → emit the literal full path (breaking the 4-char budget). Receiver still stores it. Note: this loses airtime efficiency and is a signal that the canonical dict should be extended.
 
 **Fallback chain at receive:**
 
@@ -165,6 +216,8 @@ Examples:
 3. Otherwise → emit default icon for the COT type's affiliation + log unknown-icon warning.
 
 **SA never carries an iconset.** Any SA-type (`a-*`) emission MUST omit the icon field. Parsers that receive an `a-*` event with an icon field MUST ignore the icon (render via affiliation only) and log a warning.
+
+**Versioning:** `iconset_dict_v1.json` is additive-only within a major version. Adding a new icon bumps minor (`1.0` → `1.1`). Removing or renumbering is a major-version change (`v1` → `v2`) — which invalidates archived wire traffic and MUST NOT be done lightly. The current version number is published at the top of the dict file.
 
 ---
 
