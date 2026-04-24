@@ -54,7 +54,12 @@ After the 13-character packed prefix, there is a `:` delimiter, then the variabl
 
 ### 2.2 Team Color — Single Letter `T`
 
-The team color represents the operator's team affiliation on TAK. Rendered on TAK clients as a colored icon (the person or unit appears in this color).
+The team color letter serves **two purposes** depending on the packet's COT type:
+
+- **For situational awareness beacons (`a-*` types):** the team the operator belongs to. Rendered as the team-color affiliation icon (person-in-color on TAK clients).
+- **For markers (`b-*` and `u-*` types):** the color tint applied to the custom icon. A marker with icon `D054` (car) and team letter `E` renders as a red-tinted car.
+
+One letter, two uses — saves a separate "icon color" field on the wire.
 
 | Letter | Color name | RGB hex | ARGB (TAK wire format, signed 32-bit int) |
 |---|---|---|---|
@@ -73,7 +78,9 @@ The team color represents the operator's team affiliation on TAK. Rendered on TA
 | M | Dark Green  | `#008000` | -16744448  |
 | N | Brown       | `#A52A2A` | -5952982   |
 
-If a receiver sees a letter outside `A`-`N` (currently `O`-`Z` are reserved for future colors), it substitutes `Green` (letter `L`) and logs a warning.
+**Null value:** the character `_` (underscore) at position 6 means "no team color / no tint specified." For SA this is treated as `Green` (default team) with a warning. For markers this means the icon renders with no color tint (the icon's natural colors). Emitters MAY use `_` when the source entity has no assigned team.
+
+If a receiver sees a letter outside `A`-`N` and not `_` (currently `O`-`Z` are reserved for future colors), it substitutes `Green` (letter `L`) and logs a warning.
 
 ### 2.3 Role — Single Letter `R`
 
@@ -209,13 +216,13 @@ Markers and shapes MAY carry an optional 4-character icon code after another `:`
 Icon format:
 
 ```
-<iconset-code><3-digit-id>
+<iconset-code><3-char-id>
 ```
 
-- `<iconset-code>` is one of the iconset letters defined in the complete iconset dictionary below (§3).
-- `<3-digit-id>` is a zero-padded numeric ID within that iconset.
+- `<iconset-code>` is a single character (A-Z) identifying the iconset. 11 iconsets defined in v1.0 (see §3).
+- `<3-char-id>` is a 3-character base-36 alphanumeric ID (0-9, A-Z) within that iconset. Range `000` through `ZZZ` = 46,656 unique icons per iconset. IDs under 1,000 use pure decimal digits (e.g. `054`); IDs 1,000 and above use alphanumeric (e.g. `1AB`).
 
-Example: `D054` → the "car" icon from the Default ATAK iconset.
+Example: `D0QX` → the antelope icon from the Default ATAK iconset (the actual ID for antelope in the canonical dict).
 
 If an emitter has an iconsetpath not in the dictionary, it MAY emit the literal full path instead of a 4-char code. Receivers accept either format.
 
@@ -223,133 +230,66 @@ If an emitter has an iconsetpath not in the dictionary, it MAY emit the literal 
 
 ## 3. Iconset Dictionary
 
-This is the complete canonical iconset dictionary for v2.0 — every icon code decodable on the wire is listed here with its canonical path and plain-English description.
+The canonical iconset dictionary — **every icon code decodable on v2.0 wire** — is published in this repository as a separate JSON file because its size (4,186 icons in v1.0) makes inlining impractical. The README here is the human-facing index; the JSON is the authoritative machine-readable source.
 
-### 3.1 Iconset D — Default ATAK
+**Canonical dictionary file:** [`iconset_dict_v1.json`](./iconset_dict_v1.json)
 
-UUID: `34ae1613-9645-4222-a9d2-e5f243dea2865`
+Each entry has the form:
 
-**Animals (001-049):**
+```json
+"D":{
+  "uuid":"34ae1613-9645-4222-a9d2-e5f243dea2865",
+  "name":"Default",
+  "icons":{
+    "000":{"path":"Animals/ant.png","desc":"ant"},
+    "001":{"path":"Animals/antelope.png","desc":"antelope"},
+    ...
+  }
+}
+```
 
-| Code | Filename | Description |
-|---|---|---|
-| D001 | Animals/antelope.png | Antelope |
-| D002 | Animals/bear.png | Bear |
-| D003 | Animals/cat.png | Cat |
-| D004 | Animals/cow.png | Cow |
-| D005 | Animals/dog.png | Dog |
-| D006 | Animals/eagle.png | Eagle |
-| D007 | Animals/goat.png | Goat |
-| D008 | Animals/horse.png | Horse |
-| D009 | Animals/owl.png | Owl |
-| D010 | Animals/rabbit.png | Rabbit |
+The `path` field is the file path within the iconset (which combined with the iconset UUID forms the full iconsetpath stored in TAK COT XML). The `desc` field is the plain-English description, derived from the filename (underscores and hyphens → spaces). Any licensed amateur operator can download the JSON and decode any v2.0 icon code on the air.
 
-**Transportation (050-099):**
+### 3.1 Iconset Letter-Code Assignments (v1.0)
 
-| Code | Filename | Description |
-|---|---|---|
-| D050 | Transportation/airplane.png | Airplane (generic) |
-| D051 | Transportation/bicycle.png | Bicycle |
-| D052 | Transportation/boat.png | Boat (generic small watercraft) |
-| D053 | Transportation/bus.png | Bus |
-| D054 | Transportation/car.png | Car |
-| D055 | Transportation/helicopter.png | Helicopter |
-| D056 | Transportation/motorcycle.png | Motorcycle |
-| D057 | Transportation/tank.png | Tank / tracked armor |
-| D058 | Transportation/train.png | Train |
-| D059 | Transportation/truck.png | Truck |
-| D060 | Transportation/van.png | Van |
+| Code | Iconset name | UUID | Icon count |
+|---|---|---|---|
+| `A` | APRS (non-tak) | `APRS-NONTAK` | 188 |
+| `D` | Default (ATAK-CIV) | `34ae1613-9645-4222-a9d2-e5f243dea2865` | 821 |
+| `E` | FEMA Icons | `f8f7f666-8b28-4b57-9fbb-e48e61d33b79` | 42 |
+| `F` | FalconView | `67441c4a4924b8812e0f3e2191a2228a` | 489 |
+| `G` | Generic Icons | `ad78aafb-83a6-4c07-b2b9-a897a8b6a38f` | 657 |
+| `I` | Incident Management | `f3723f30315ea30f2f4b9101556772e2` | 12 |
+| `L` | Google | `f7f71666-8b28-4b57-9fbb-e38e61d33b79` | 96 |
+| `M` | OSM | `6d781afb-89a6-4c07-b2b9-a89748b6a38f` | 347 |
+| `O` | GeoOps | `83198b4872a8c34eb9c549da8a4de5a28f07821185b39a2277948f66c24ac17a` | 68 |
+| `P` | Public Safety Air | `ba0f5e196dfcee47a00ee3f4a494d64d` | 50 |
+| `R` | Responder Icons | `8a2105090b5f30fd2cefc64f3eae8ad3` | 1,416 |
 
-**People (100-149):**
+**Total v1.0:** 4,186 icons across 11 iconsets.
 
-| Code | Filename | Description |
-|---|---|---|
-| D100 | People/person.png | Generic person on foot |
-| D101 | People/soldier.png | Soldier (military) |
-| D102 | People/team_lead.png | Team lead / leader |
-| D103 | People/medic.png | Medic |
-| D104 | People/sniper.png | Sniper |
-| D105 | People/k9.png | K9 handler |
-| D106 | People/officer.png | Officer (law enforcement or military) |
-| D107 | People/casualty.png | Casualty / wounded |
+### 3.2 ID Format
 
-**Weapons (150-199):**
+Each icon ID is a **3-character base-36 alphanumeric string** (0-9, A-Z).
 
-| Code | Filename | Description |
-|---|---|---|
-| D150 | Weapons/rifle.png | Rifle |
-| D151 | Weapons/mortar.png | Mortar |
-| D152 | Weapons/machine_gun.png | Machine gun |
-| D153 | Weapons/artillery.png | Artillery piece |
+- Range `000`-`ZZZ` = 46,656 unique IDs per iconset (more than enough; largest iconset in v1.0 is 1,416 icons).
+- IDs below 1,000 look like plain decimal digits (`001`, `042`, `999`).
+- IDs at or above 1,000 use alphanumeric base-36 (`1000` → `ZZZ`; `1000` decimal = `RS` base-36 padded to `0RS` = 3 chars).
+- Ordering within an iconset is alphabetical by (group, filename). Deterministic so IDs never shift as the dictionary is extended.
 
-**Structures (200-249):**
+### 3.3 Reserved Letters
 
-| Code | Filename | Description |
-|---|---|---|
-| D200 | Structures/building.png | Building (generic) |
-| D201 | Structures/bunker.png | Bunker / fortified position |
-| D202 | Structures/bridge.png | Bridge |
-| D203 | Structures/tower.png | Tower (radio, water, observation) |
-| D204 | Structures/tent.png | Tent / temporary shelter |
-| D205 | Structures/gate.png | Gate / entry control point |
+- **Codes in use (v1.0):** `A`, `D`, `E`, `F`, `G`, `I`, `L`, `M`, `O`, `P`, `R`.
+- **Codes available for future canonical iconsets:** `B`, `C`, `H`, `J`, `K`, `N`, `Q`, `S`, `T`, `U`, `V`, `W`.
+- **Codes reserved for operator-custom iconsets:** `X`, `Y`, `Z`. Operators using these codes on amateur frequencies MUST publish their custom `iconset_dict.user.json` additions (filename + English description) to every operator on their network, preserving Part 97 transparency.
 
-**Hazards (250-299):**
+### 3.4 Versioning Rules
 
-| Code | Filename | Description |
-|---|---|---|
-| D250 | Hazards/fire.png | Fire |
-| D251 | Hazards/explosion.png | Explosion |
-| D252 | Hazards/smoke.png | Smoke |
-| D253 | Hazards/flood.png | Flood / water hazard |
-| D254 | Hazards/biohazard.png | Biohazard |
-| D255 | Hazards/radiation.png | Radiation |
-| D256 | Hazards/chemical.png | Chemical hazard / spill |
-
-### 3.2 Iconset F — FEMA Incident Management
-
-UUID: `f3723f30315ea30f2f4b9101556772e2`
-
-**Incident Management (001-049):**
-
-| Code | Filename | Description |
-|---|---|---|
-| F001 | Incident Management/command post.png | Incident Command Post |
-| F002 | Incident Management/staging area.png | Staging Area |
-| F003 | Incident Management/casualty collection point.png | Casualty Collection Point |
-| F004 | Incident Management/medical triage area.png | Medical Triage Area |
-| F005 | Incident Management/decon area.png | Decontamination Area |
-| F006 | Incident Management/emergency operations center.png | Emergency Operations Center (EOC) |
-| F007 | Incident Management/water point.png | Water Point / Resupply |
-| F008 | Incident Management/helicopter landing area.png | Helicopter Landing Area (helo LZ) |
-| F009 | Incident Management/aircraft crash.png | Aircraft Crash Site |
-| F010 | Incident Management/fire hazard.png | Fire Hazard |
-| F011 | Incident Management/road blocked.png | Road Blocked |
-| F012 | Incident Management/incident.png | Generic Incident |
-
-**Human-Caused Hazards (050-099):**
-
-| Code | Filename | Description |
-|---|---|---|
-| F050 | Human Caused Hazards/Hazard--Structural-Collapse.png | Structural Collapse |
-| F051 | Human Caused Hazards/Hazard--Radiological-General.png | Radiological Hazard |
-| F052 | Human Caused Hazards/Hazard--Chemical-Spill.png | Chemical Spill |
-| F053 | Human Caused Hazards/Hazard--Biological-General.png | Biological Hazard |
-| F054 | Human Caused Hazards/Hazard--Explosion.png | Explosion Site |
-
-### 3.3 Iconset codes reserved for future use
-
-- `A`, `B`, `C`, `E`, `G`, `H`, `I`, `J`, `K`, `L`, `M`, `N`, `O`, `P`, `Q`, `R`, `S`, `T`, `U`, `V`, `W`: available for future canonical iconsets added to this protocol spec.
-- `X`, `Y`, `Z`: reserved for operator-maintained custom iconsets. An operator using these codes on amateur frequencies MUST publish their custom iconset-dictionary additions (filename + description) to any operator on the same network, preserving Part 97 transparency.
-
-### 3.4 Versioning
-
-This dictionary is **version 1.0**. Future updates follow these rules:
-
-- **Adding a new icon ID** → bump minor version (`1.0` → `1.1`). Existing IDs never change.
+- **Adding a new icon to an existing iconset** → bump minor version (`1.0` → `1.1`). Existing IDs never change.
 - **Adding a new iconset code** → bump minor version. Existing codes never change.
-- **Renumbering or removing an icon ID** → major-version bump (`1.x` → `2.0`). Invalidates archived wire traffic. Only done in emergencies.
+- **Renumbering or removing an icon ID** → major-version bump (`1.x` → `2.0`). Invalidates archived wire traffic; only done in emergencies.
 
-The version number in force at time of transmission is published at the top of this document (currently **v1.0**, see §6 Version History).
+The version number in force at time of transmission is published at the top of `iconset_dict_v1.json` (currently **v1.0**, dated 2026-04-24).
 
 ---
 
