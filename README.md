@@ -1,8 +1,8 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 2.0 (draft)
+**Version:** 2.0
 **Date:** 2026-04-24
-**Status:** Breaking change vs v1.x — no backwards compatibility.
+**Status:** Current. Breaking change vs v1.x — no backwards compatibility.
 
 This document is **self-contained**. Every code on the wire is defined here, in plain English, so any licensed amateur radio operator can decode what they hear on the air without consulting external sources. This satisfies FCC Part 97 §97.113(a)(4) which prohibits "codes or ciphers intended to obscure the meaning" of a transmission. Compressed is not obscured — these tables make the meaning of every code unambiguous.
 
