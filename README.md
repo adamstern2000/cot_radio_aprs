@@ -1,8 +1,8 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 2.0
+**Version:** 2.1
 **Date:** 2026-04-24
-**Status:** Current. Breaking change vs v1.x — no backwards compatibility.
+**Status:** Current. Backward-compatible additive change to v2.0 chat relay (DM form unchanged; new 6-char tag added for BLN1 broadcasts with team letter). All other v2.0 wire shapes unchanged.
 
 This document is **self-contained**. Every code on the wire is defined here, in plain English, so any licensed amateur radio operator can decode what they hear on the air without consulting external sources. This satisfies FCC Part 97 §97.113(a)(4) which prohibits "codes or ciphers intended to obscure the meaning" of a transmission. Compressed is not obscured — these tables make the meaning of every code unambiguous.
 
@@ -295,28 +295,40 @@ The version number in force at time of transmission is published at the top of `
 
 ## 4. Chat Format (Messages and Bulletins)
 
-Chat packets use the standard APRS message format:
+Chat packets use the standard APRS message format. Two tag shapes exist:
 
+**DM form (unicast addressee — v2.0):**
 ```
 ORIGINATOR>APRS,PATH::ADDRESSEE :TAK:<H><UUUU>:<SENDER>:<body>
 ```
+5-char tag. No team letter — a DM's team affiliation is implicit in the targeted callsign.
+
+**Broadcast form (addressee `BLN1` — v2.1):**
+```
+ORIGINATOR>APRS,PATH::BLN1     :TAK:<H><UUUU><T>:<SENDER>:<body>
+```
+6-char tag with a trailing team letter `<T>`. Required for team-chat broadcasts so the receiving gateway can route to the correct team chatroom on its TAK multicast.
 
 - **ORIGINATOR** — gateway's ham callsign + SSID.
-- **ADDRESSEE** — 9-character space-padded recipient. `BLN1` = bulletin (broadcast to all); a specific callsign = direct message.
-- **TAK:** — literal prefix marking this as a v2.0 chat packet.
+- **ADDRESSEE** — 9-character space-padded recipient. `BLN1` = broadcast (see §4.1); a specific callsign = direct message.
+- **TAK:** — literal prefix marking this as a v2.0/v2.1 chat packet.
 - **`<H>`** — hop count, 1 hex character (`0`-`F`). The gateway that first emits the packet sets hop=`0`. Each gateway that re-relays increments hop by 1. A gateway at hop ≥ `bridge_max_hops` (default 2) delivers locally only and does not re-transmit.
 - **`<UUUU>`** — UUID, 4 hex characters. Random per-message identifier for loop prevention.
+- **`<T>`** (broadcast only) — team letter. `_` = All Chat Rooms; `A`-`N` = team chat to that color (per §2.2 table — Cyan=`J`, Green=`L`, Red=`E`, …). Absent on DM form.
 - **`<SENDER>`** — the original sender's display name (TAK callsign or mesh node short-name). May contain letters, digits, space, hyphen, period — ends at the next `:`.
 - **`<body>`** — the chat message text.
 
-### 4.1 Addressee Routing (How TAK Chatrooms Map to APRS Addressees)
+### 4.1 Addressee + Team Routing
 
-| TAK chatroom | APRS addressee | Notes |
-|---|---|---|
-| `All Chat Rooms` | `BLN1` | Bulletin broadcast. Hop=0, fresh UUID. |
-| Valid amateur callsign (e.g. `KN6YYY-9`) | The callsign, 9-char padded | Direct message to an APRS station. |
-| TAK tactical callsign (e.g. `HAWK`, `FALCON`) | The callsign, 9-char padded | Direct message cross-TAK; receiving gateway rebuilds as a TAK GeoChat. |
-| Mesh node short name (recipient UID begins `MESH-`) | (not transmitted) | No APRS equivalent — dropped at emit. |
+| TAK chatroom | APRS addressee | Team letter `<T>` | Notes |
+|---|---|---|---|
+| `All Chat Rooms` | `BLN1` | `_` | Broadcast to everyone — 6-char tag. |
+| Team color name (e.g. `Cyan`, `Green`) | `BLN1` | `A`-`N` per §2.2 | Team chat broadcast — 6-char tag. Receivers rebuild as a TAK chat with `chatroom=<color>`. |
+| Valid amateur callsign (e.g. `KN6YYY-9`) | The callsign, 9-char padded | (none — 5-char tag) | Direct message to an APRS station. |
+| TAK tactical callsign (e.g. `HAWK`, `FALCON`) | The callsign, 9-char padded | (none — 5-char tag) | Direct message cross-TAK; receiving gateway rebuilds as a TAK GeoChat. |
+| Mesh node short name (recipient UID begins `MESH-`) | (not transmitted) | — | No APRS equivalent — dropped at emit. |
+
+**Parsing rule:** the receiver distinguishes DM form from broadcast form by tag length. 5-hex tag → DM (no team letter). 5-hex + 1 letter (`_`/`A`-`N`) tag → broadcast with team letter.
 
 ### 4.2 Multi-Part Messages
 
@@ -386,4 +398,5 @@ v2.0 is in the same Part 97 category as existing APRS compression methods (Mic-E
 | 1.2 | 2026-04-17 | Added GATEWAY field (tactical callsign) to every prefix. |
 | 1.3 | 2026-04-20 | Bidirectional group-chat relay (TAK All Chat ↔ APRS BLN1) with UUID-based loop prevention. |
 | 1.4 | 2026-04-20 | Human-readable hint tail appended to object comments for plain-APRS operator visibility. |
-| **2.0** | **2026-04-24** | **Ground-up rewrite for airtime efficiency. Packed fixed-width prefix, single-letter codes for team/role, 6-character COT type, 4-character iconset IDs via published dictionary, 4-hex UUID with 30s cache TTL. No back-compat with v1.x. Fully self-contained — every code defined in this document for Part 97 transparency.** |
+| 2.0 | 2026-04-24 | Ground-up rewrite for airtime efficiency. Packed fixed-width prefix, single-letter codes for team/role, 6-character COT type, 4-character iconset IDs via published dictionary, 4-hex UUID with 30s cache TTL. No back-compat with v1.x. Fully self-contained — every code defined in this document for Part 97 transparency. |
+| **2.1** | **2026-04-24** | **Chat-relay team letter. BLN1 broadcasts use a 6-char tag `<H><UUUU><T>` where `T` is the team-color letter (`_` for All Chat Rooms, `A`-`N` per §2.2 for team chats). DM form (unicast addressee) unchanged at 5-char tag. Fixes cross-gateway team-chat routing — previously team chats fell into the DM path to nonexistent callsigns like "Cyan" or "Green".** |
