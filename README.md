@@ -1,8 +1,8 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 2.1
+**Version:** 2.2
 **Date:** 2026-04-24
-**Status:** Current. Backward-compatible additive change to v2.0 chat relay (DM form unchanged; new 6-char tag added for BLN1 broadcasts with team letter). All other v2.0 wire shapes unchanged.
+**Status:** Current. Backward-compatible. v2.1 added the team letter to BLN1 chat-relay broadcasts (6-char tag). v2.2 re-introduces the optional human-readable hint tail (§2.7) on SA object comments for plain-APRS-operator visibility. Receivers from any v2.x MUST strip the ` | ` tail before parsing.
 
 This document is **self-contained**. Every code on the wire is defined here, in plain English, so any licensed amateur radio operator can decode what they hear on the air without consulting external sources. This satisfies FCC Part 97 §97.113(a)(4) which prohibits "codes or ciphers intended to obscure the meaning" of a transmission. Compressed is not obscured — these tables make the meaning of every code unambiguous.
 
@@ -209,6 +209,25 @@ After the 13-character packed prefix and a `:` delimiter, the full TAK callsign 
 
 Allowed characters: letters, digits, space, hyphen, period. Callsign ends at the next `:` (if an ICON follows) or at the end of the APRS comment.
 
+### 2.7 Optional Human-Readable Hint Tail (v2.2)
+
+Emitters MAY append a free-form human-readable tail to the SA object comment, separated from the wire prefix + callsign + optional icon by a ` | ` (space-pipe-space) delimiter:
+
+```
+TAK01JMafguc_:HAWK | DM:KN6ZPL-7 HAWK
+```
+
+Purpose: plain-APRS operators viewing the TAK entity on aprs.fi / YAAC / APRSIS32 see a ready-made instruction for DMing the TAK participant back through the gateway. Typical template: `DM:<gateway callsign+SSID> <TAK target name>`.
+
+**Rules:**
+
+- The tail is SA-only (entities with `<__group>` on the source CoT). Placed markers (no `<__group>`) MUST NOT carry it.
+- The tail may contain colons, spaces, and punctuation — the `:` delimiter rule only applies to the wire prefix ending at the last `:` before the ` | ` separator.
+- Receivers MUST strip the ` | <...>` tail BEFORE applying the §2.1–§2.6 grammar. A hint like `DM:KN6ZPL-7 HAWK` would otherwise be mistakenly parsed as an icon field.
+- Emitters MUST keep the TOTAL comment (prefix + callsign + icon + hint) ≤ 67 characters to stay under the APRS practical comment cap. Truncate the hint template if necessary.
+- The tail is informative, not normative. Receivers MAY log it, display it in operator UIs, or ignore it. It MUST NOT affect routing decisions.
+- HF deployments SHOULD disable the hint tail (airtime premium). VHF/APRS-IS deployments SHOULD enable it.
+
 ### 2.6 Icon (Optional)
 
 Markers and shapes MAY carry an optional 4-character icon code after another `:` delimiter. Situational-awareness beacons (any `a-*` COT type) MUST NOT carry an icon — they render using only the team color and COT type symbology.
@@ -399,4 +418,5 @@ v2.0 is in the same Part 97 category as existing APRS compression methods (Mic-E
 | 1.3 | 2026-04-20 | Bidirectional group-chat relay (TAK All Chat ↔ APRS BLN1) with UUID-based loop prevention. |
 | 1.4 | 2026-04-20 | Human-readable hint tail appended to object comments for plain-APRS operator visibility. |
 | 2.0 | 2026-04-24 | Ground-up rewrite for airtime efficiency. Packed fixed-width prefix, single-letter codes for team/role, 6-character COT type, 4-character iconset IDs via published dictionary, 4-hex UUID with 30s cache TTL. No back-compat with v1.x. Fully self-contained — every code defined in this document for Part 97 transparency. |
-| **2.1** | **2026-04-24** | **Chat-relay team letter. BLN1 broadcasts use a 6-char tag `<H><UUUU><T>` where `T` is the team-color letter (`_` for All Chat Rooms, `A`-`N` per §2.2 for team chats). DM form (unicast addressee) unchanged at 5-char tag. Fixes cross-gateway team-chat routing — previously team chats fell into the DM path to nonexistent callsigns like "Cyan" or "Green".** |
+| 2.1 | 2026-04-24 | Chat-relay team letter. BLN1 broadcasts use a 6-char tag `<H><UUUU><T>` where `T` is the team-color letter (`_` for All Chat Rooms, `A`-`N` per §2.2 for team chats). DM form (unicast addressee) unchanged at 5-char tag. Fixes cross-gateway team-chat routing — previously team chats fell into the DM path to nonexistent callsigns like "Cyan" or "Green". |
+| **2.2** | **2026-04-24** | **Optional human-readable hint tail on SA object comments (§2.7). Emitter appends ` \| <hint>` after the wire prefix+callsign[+icon] for SA packets only; receivers MUST strip before parsing. Enables the v1.4-era `DM:<gateway> <target>` convention to resume for plain-APRS-operator visibility on aprs.fi without breaking wire compatibility. Default template operator-configurable; HF deployments disable.** |
