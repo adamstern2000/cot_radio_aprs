@@ -1,8 +1,8 @@
 # TAK-APRS Protocol Extension
 
-**Version:** 2.2
-**Date:** 2026-04-24
-**Status:** Current. Backward-compatible. v2.1 added the team letter to BLN1 chat-relay broadcasts (6-char tag). v2.2 re-introduces the optional human-readable hint tail (§2.7) on SA object comments for plain-APRS-operator visibility. Receivers from any v2.x MUST strip the ` | ` tail before parsing.
+**Version:** 2.3
+**Date:** 2026-05-09
+**Status:** Current. Backward-compatible. v2.1 added the team letter to BLN1 chat-relay broadcasts (6-char tag). v2.2 re-introduces the optional human-readable hint tail (§2.7) on SA object comments for plain-APRS-operator visibility. v2.3 adds the optional `:CRC16` marker-UID hash segment (§2.8) and formalizes the APRS object-kill `_` state character (§2.9) for cross-bridge marker lifecycle propagation. Receivers from any v2.x MUST strip the ` | ` tail before parsing.
 
 This document is **self-contained**. Every code on the wire is defined here, in plain English, so any licensed amateur radio operator can decode what they hear on the air without consulting external sources. This satisfies FCC Part 97 §97.113(a)(4) which prohibits "codes or ciphers intended to obscure the meaning" of a transmission. Compressed is not obscured — these tables make the meaning of every code unambiguous.
 
@@ -39,6 +39,8 @@ ORIGINATOR>APRS,PATH:;NAME     *DDHHMMzDDMM.MMN/DDDMM.MMW<s><c>TAK<NN><T><R><TTT
 - **`<s>`** — APRS symbol table (`/` or `\`).
 - **`<c>`** — APRS symbol code character.
 - Everything after that is the v2.0 packed prefix (fixed-width) + optional variable fields.
+
+After the 13-character packed prefix, there is a `:` delimiter, then the variable-length CALLSIGN field, optionally followed by `:` and an ICON code, optionally followed by ` | ` and an SA hint tail (§2.7, SA only), and optionally followed by `:` and a CRC16 hash (16 lowercase hex chars per §2.8, markers only). Segments are colon-separated; receivers parse left-to-right and silently ignore unrecognized segments after CALLSIGN.
 
 ### 2.1 The Packed Prefix (13 characters)
 
@@ -245,6 +247,59 @@ Example: `D0QX` → the antelope icon from the Default ATAK iconset (the actual 
 
 If an emitter has an iconsetpath not in the dictionary, it MAY emit the literal full path instead of a 4-char code. Receivers accept either format.
 
+### 2.8 Object UID Hash (Optional) — `CRC16`
+
+Markers MAY carry an optional 16-character hash segment after the callsign and optional icon. The hash provides a stable cross-gateway identifier for the same physical marker across the bridge, so that a marker placed on one TAK network and bridged to another via APRS can be moved or deleted from either side and have the change propagate.
+
+Format:
+
+```
+:<16 lowercase hex chars>
+```
+
+Computation:
+
+```python
+import hashlib
+crc16 = hashlib.sha256(uid.encode("utf-8")).hexdigest()[:16]
+```
+
+- `uid` is the originating TAK client's marker UID (e.g. WinTAK assigns `J-W-{32 hex with dashes}`) as a UTF-8-encoded byte string.
+- The algorithm is SHA-256 per NIST FIPS 180-4, truncated to the first 16 hex chars (64 bits of entropy). The segment name "CRC16" is retained for continuity with the v2.0 segment-naming convention; the underlying algorithm is a truncated cryptographic hash rather than a polynomial CRC. SHA-256 was chosen because it's in Python's stdlib (no third-party dependency), well-known across all major languages, and produces uniform-random output across arbitrary UID input formats.
+- The output is always exactly 16 lowercase hex characters.
+
+Collision space: 64 bits ≈ 1.8 × 10^19 possible values. The birthday-paradox 50%-collision threshold is √(2^64) ≈ 4 billion distinct markers in the same conceptually-overlapping namespace — many orders of magnitude beyond any realistic deployment.
+
+Receiver behavior:
+- A gateway receiving a frame with `:CRC16` MUST use `aprs-<CRC16>` as the local TAK multicast UID for that marker. WinTAK on the local TAK net will deduplicate by UID, so subsequent moves/edits/deletes for the same marker update in place.
+- A gateway that originated the marker (and thus has the CRC16 in its in-memory `my_markers` map) MAY use the originator's local UID for the multicast emit instead of `aprs-<CRC16>`, so its own WinTAK updates the originally-placed marker rather than seeing a separate "round-trip" copy.
+
+Emitter behavior:
+- An emitter SHOULD include `:CRC16` on every v2 marker frame (placement, move, kill) whose source COT carries an identifiable TAK UID.
+- SA contact beacons and shapes/routes MUST NOT carry `:CRC16` (the segment is markers-only).
+
+Backward compatibility:
+- v2.0–v2.2 receivers ignore unrecognized trailing segments after `:ICON`. v2.3 emitters interoperate cleanly with older receivers; the older receivers lose the cross-bridge edit/delete propagation benefit but everything else works.
+- v2.0–v2.2 emitters never produce `:CRC16`. v2.3 receivers fall back to synthesizing `aprs-<callsign>` as the local UID for those frames (legacy behavior).
+
+### 2.9 Object State Character — `*` Live, `_` Withdrawn
+
+APRS Object Format defines two single-character state codes between the object name and the timestamp:
+
+| Char | Meaning |
+|---|---|
+| `*` | **Live** — the object is current and located at the reported position. |
+| `_` | **Withdrawn** — the object has been deleted by its originator. The receiver MUST remove the object from any local map / cache. |
+
+cot_radio_aprs v2.0–v2.2 implicitly used `*` only. v2.3 formalizes both:
+
+- Emitters MUST use `*` for placement, heartbeat, move, or any other "the object exists at this position" packet.
+- Emitters MUST use `_` for deletions. The position field SHOULD mirror the last-known position of the object (for human radio operators monitoring the channel), but receivers do not use the position from a `_` packet for any local state.
+- Receivers seeing `_` MUST treat the packet as a deletion:
+  - If the frame carries `:CRC16` (per §2.8), build a TAK t-x-d-d delete COT targeting `aprs-<CRC16>` (or, if the gateway originated the marker, target the originator's local UID per §2.8's "Receiver behavior" note).
+  - If no `:CRC16` is present (legacy v2.0–v2.2 frame), the delete cannot reliably propagate cross-bridge — receivers MAY ignore the kill or build a t-x-d-d targeting the legacy `aprs-<callsign>` form best-effort.
+  - Receivers MUST NOT use the position field of a `_` packet to update any local marker state — it's a signpost only.
+
 ---
 
 ## 3. Iconset Dictionary
@@ -383,6 +438,7 @@ A cot_radio instance MUST drop packets that are echoes of its own transmissions:
 1. **Own station number** — if the packed prefix's `NN` matches the gateway's own `station_number`, drop the packet.
 2. **Own chat callsign** — if a chat packet's ORIGINATOR field matches the gateway's own ham callsign-SSID, drop.
 3. **Peer echo** — if an inbound object's CALLSIGN is already observed on the gateway's local TAK multicast (via a short-TTL contact registry), drop. Prevents duplicate markers when two gateways share a LAN or a mesh bridge is in use.
+4. **Own-marker round-trip via CRC16 (v2.3)** — when an incoming v2.3 marker frame's `:CRC16` matches an entry in the gateway's in-memory `my_markers` map (populated when the gateway's local TAK client originally placed the marker), the gateway uses the original TAK UID for its multicast emit instead of synthesizing `aprs-<CRC16>`. This prevents the originator from seeing a duplicate "round-trip" marker on its own TAK display. Does not replace the prior 3 rules.
 
 ---
 
@@ -419,4 +475,5 @@ v2.0 is in the same Part 97 category as existing APRS compression methods (Mic-E
 | 1.4 | 2026-04-20 | Human-readable hint tail appended to object comments for plain-APRS operator visibility. |
 | 2.0 | 2026-04-24 | Ground-up rewrite for airtime efficiency. Packed fixed-width prefix, single-letter codes for team/role, 6-character COT type, 4-character iconset IDs via published dictionary, 4-hex UUID with 30s cache TTL. No back-compat with v1.x. Fully self-contained — every code defined in this document for Part 97 transparency. |
 | 2.1 | 2026-04-24 | Chat-relay team letter. BLN1 broadcasts use a 6-char tag `<H><UUUU><T>` where `T` is the team-color letter (`_` for All Chat Rooms, `A`-`N` per §2.2 for team chats). DM form (unicast addressee) unchanged at 5-char tag. Fixes cross-gateway team-chat routing — previously team chats fell into the DM path to nonexistent callsigns like "Cyan" or "Green". |
-| **2.2** | **2026-04-24** | **Optional human-readable hint tail on SA object comments (§2.7). Emitter appends ` \| <hint>` after the wire prefix+callsign[+icon] for SA packets only; receivers MUST strip before parsing. Enables the v1.4-era `DM:<gateway> <target>` convention to resume for plain-APRS-operator visibility on aprs.fi without breaking wire compatibility. Default template operator-configurable; HF deployments disable.** |
+| 2.2 | 2026-04-24 | Optional human-readable hint tail on SA object comments (§2.7). Emitter appends ` \| <hint>` after the wire prefix+callsign[+icon] for SA packets only; receivers MUST strip before parsing. Enables the v1.4-era `DM:<gateway> <target>` convention to resume for plain-APRS-operator visibility on aprs.fi without breaking wire compatibility. Default template operator-configurable; HF deployments disable. |
+| **2.3** | **2026-05-09** | **Cross-bridge marker lifecycle: optional `:CRC16` segment (§2.8) carrying 16-hex SHA-256-truncated hash of the originating TAK client's marker UID (canonical wire identifier for the same marker on every gateway; 64-bit collision space). Formalizes APRS object-kill `_` state character (§2.9) as the cross-bridge delete signal. Backward-compatible with v2.0–v2.2 (segments optional; legacy peers ignore them). No protocol break.** |
